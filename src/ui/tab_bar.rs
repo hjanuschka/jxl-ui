@@ -191,9 +191,9 @@ impl TabBar {
                     .unwrap_or("downloaded.jxl");
 
                 // Create temp directory and save file
-                // Use into_path() to prevent auto-deletion when TempDir goes out of scope
+                // Use keep() to prevent auto-deletion when TempDir goes out of scope
                 let temp_dir = tempfile::tempdir()?;
-                let temp_path = temp_dir.into_path(); // This prevents auto-cleanup
+                let temp_path = temp_dir.keep(); // This prevents auto-cleanup
                 let file_path = temp_path.join(filename);
 
                 let bytes = response.bytes()?;

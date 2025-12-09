@@ -628,7 +628,7 @@ impl ImageTab {
         };
 
         // Get cached image directly (all frames pre-cached for animations)
-        let (gpui_image, frame_width, frame_height) = match &mut self.animation_state {
+        let (gpui_image, _frame_width, _frame_height) = match &mut self.animation_state {
             Some(AnimationState::SingleFrame { frame, cached_image }) => {
                 let img = if let Some(cached) = cached_image {
                     cached.clone()
