@@ -1,6 +1,21 @@
-# jxl-ui
+<p align="center">
+  <img src="assets/icon.png" alt="JXL-UI Logo" width="200"/>
+</p>
 
-A native JPEG XL image viewer built with [GPUI](https://gpui.rs) (Zed's GPU-accelerated UI framework).
+<h1 align="center">JXL-UI</h1>
+
+<p align="center">
+  A native JPEG XL image viewer built with <a href="https://gpui.rs">GPUI</a> (Zed's GPU-accelerated UI framework).
+</p>
+
+<p align="center">
+  <a href="https://github.com/hjanuschka/jxl-ui/releases">Download</a> •
+  <a href="#features">Features</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#keyboard-shortcuts">Shortcuts</a>
+</p>
+
+---
 
 ## Features
 
