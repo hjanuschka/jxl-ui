@@ -1,5 +1,7 @@
 use crate::decoder::{worker, DecodeResult, DecodedFrame, ImageMetadata};
-use gpui::{Context, FocusHandle, Focusable, Image as GpuiImage, ImageFormat, ImageSource, Window, div, img, prelude::*, px, rgb, white};
+use gpui::{Context, FocusHandle, Focusable, RenderImage, ImageSource, Window, div, img, prelude::*, px, rgb, white};
+use image::{ImageBuffer, RgbaImage};
+use smallvec::SmallVec;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,11 +9,11 @@ use std::sync::Arc;
 enum AnimationState {
     SingleFrame {
         frame: DecodedFrame,
-        cached_image: Option<Arc<GpuiImage>>,
+        cached_image: Option<Arc<RenderImage>>,
     },
     Animation {
         frames: Vec<DecodedFrame>,
-        cached_images: Vec<Option<Arc<GpuiImage>>>,
+        cached_images: Vec<Option<Arc<RenderImage>>>,
         current_frame: usize,
         is_playing: bool,
         playback_started: bool,
@@ -94,7 +96,7 @@ impl ImageTab {
                     DecodeResult::SingleFrame { frame, metadata } => {
                         log::info!("Pre-caching single frame...");
                         let cache_start = std::time::Instant::now();
-                        let cached_image = Some(Self::encode_frame_to_png(&frame));
+                        let cached_image = Some(Self::frame_to_render_image(&frame));
                         log::info!("Pre-cached single frame in {:?}", cache_start.elapsed());
                         Ok((Some(AnimationState::SingleFrame { frame, cached_image }), metadata))
                     }
@@ -464,33 +466,33 @@ impl ImageTab {
         )
     }
 
-    /// Encode a single frame to PNG and return as GpuiImage
-    fn encode_frame_to_png(frame: &DecodedFrame) -> Arc<GpuiImage> {
-        use image::{ImageBuffer, RgbaImage};
+    /// Convert a frame's RGBA data to RenderImage for GPU display
+    /// This avoids expensive PNG encoding by using raw pixel data directly
+    fn frame_to_render_image(frame: &DecodedFrame) -> Arc<RenderImage> {
+        // Clone the RGBA data and convert to BGRA (GPUI uses BGRA internally)
+        let mut bgra_data = frame.rgba_data.clone();
+        for pixel in bgra_data.chunks_exact_mut(4) {
+            pixel.swap(0, 2); // Swap R and B channels: RGBA -> BGRA
+        }
 
+        // Create an ImageBuffer from the raw BGRA data
         let img_buffer: RgbaImage = ImageBuffer::from_raw(
             frame.width,
             frame.height,
-            frame.rgba_data.clone(),
+            bgra_data,
         )
         .expect("Failed to create image buffer");
 
-        let mut png_bytes = Vec::new();
-        img_buffer
-            .write_to(
-                &mut std::io::Cursor::new(&mut png_bytes),
-                image::ImageFormat::Png,
-            )
-            .expect("Failed to encode PNG");
-
-        Arc::new(GpuiImage::from_bytes(ImageFormat::Png, png_bytes))
+        // Create a Frame and wrap in RenderImage - no PNG encoding needed!
+        let img_frame = image::Frame::new(img_buffer);
+        Arc::new(RenderImage::new(SmallVec::from_elem(img_frame, 1)))
     }
 
     /// Pre-cache all animation frames to avoid stuttering on first playback
-    fn precache_animation_frames(frames: &[DecodedFrame]) -> Vec<Option<Arc<GpuiImage>>> {
+    fn precache_animation_frames(frames: &[DecodedFrame]) -> Vec<Option<Arc<RenderImage>>> {
         frames
             .iter()
-            .map(|frame| Some(Self::encode_frame_to_png(frame)))
+            .map(|frame| Some(Self::frame_to_render_image(frame)))
             .collect()
     }
 
@@ -619,7 +621,7 @@ impl ImageTab {
 
     fn render_image(&mut self) -> gpui::Div {
         // Check if we need to render all frames for GPU warmup
-        let warmup_images: Option<Vec<Arc<GpuiImage>>> = match &self.animation_state {
+        let warmup_images: Option<Vec<Arc<RenderImage>>> = match &self.animation_state {
             Some(AnimationState::Animation { cached_images, gpu_warmup_done, .. }) if !gpu_warmup_done => {
                 // During warmup, collect ALL cached images to render them all
                 Some(cached_images.iter().filter_map(|img| img.clone()).collect())
@@ -634,7 +636,7 @@ impl ImageTab {
                     cached.clone()
                 } else {
                     // Cache single frame on first render
-                    let cached = Self::encode_frame_to_png(frame);
+                    let cached = Self::frame_to_render_image(frame);
                     *cached_image = Some(cached.clone());
                     cached
                 };
@@ -707,7 +709,7 @@ impl ImageTab {
                     .child(
                         // Display image: natural size if smaller than window, scale down if larger
                         // max_w_full/max_h_full constrains to container, object_fit maintains aspect ratio
-                        img(ImageSource::Image(gpui_image))
+                        img(ImageSource::Render(gpui_image))
                             .max_w_full()
                             .max_h_full()
                             .object_fit(gpui::ObjectFit::Contain)
@@ -722,7 +724,7 @@ impl ImageTab {
                                 .left(px(-10000.0))
                                 .children(images.into_iter().map(|image| {
                                     // Render at actual frame size to force full texture upload
-                                    img(ImageSource::Image(image))
+                                    img(ImageSource::Render(image))
                                 }))
                         )
                     })

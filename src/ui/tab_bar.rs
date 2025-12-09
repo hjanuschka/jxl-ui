@@ -1,5 +1,6 @@
+use crate::ui::about_window::AboutWindow;
 use crate::ui::image_tab::ImageTab;
-use gpui::{Context, Entity, ExternalPaths, FocusHandle, Focusable, Window, div, hsla, prelude::*, px, rgb, white};
+use gpui::{App, Context, Entity, ExternalPaths, FocusHandle, Focusable, Window, div, hsla, prelude::*, px, rgb, white};
 use rfd::FileDialog;
 use std::path::PathBuf;
 
@@ -11,7 +12,6 @@ pub struct TabBar {
     show_url_dialog: bool,
     url_input: String,
     url_input_selected: bool, // Track if all text is selected
-    show_about_dialog: bool,
 }
 
 impl TabBar {
@@ -37,7 +37,6 @@ impl TabBar {
             show_url_dialog: false,
             url_input: String::new(),
             url_input_selected: false,
-            show_about_dialog: false,
         }
     }
 
@@ -150,17 +149,10 @@ impl TabBar {
         cx.notify();
     }
 
-    /// Show About dialog
-    pub fn show_about_dialog(&mut self, cx: &mut Context<Self>) {
+    /// Show About dialog as a separate window
+    pub fn show_about_dialog(&mut self, cx: &mut App) {
         log::info!("Opening About dialog");
-        self.show_about_dialog = true;
-        cx.notify();
-    }
-
-    /// Hide About dialog
-    pub fn hide_about_dialog(&mut self, cx: &mut Context<Self>) {
-        self.show_about_dialog = false;
-        cx.notify();
+        AboutWindow::open(cx);
     }
 
     /// Download and open JXL from URL
@@ -388,190 +380,6 @@ impl TabBar {
         )
     }
 
-    fn render_about_dialog(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        if !self.show_about_dialog {
-            return None;
-        }
-
-        Some(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(hsla(0.0, 0.0, 0.0, 0.7))
-                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                    this.hide_about_dialog(cx);
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_4()
-                        .p_6()
-                        .bg(rgb(0x2a2a2a))
-                        .border_1()
-                        .border_color(rgb(0x404040))
-                        .rounded(px(8.0))
-                        .min_w(px(450.0))
-                        .max_w(px(550.0))
-                        .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
-                            cx.stop_propagation();
-                        })
-                        // Header
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_2xl()
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(white())
-                                        .child("JXL Viewer")
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(rgb(0x888888))
-                                        .child(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                                )
-                        )
-                        .child(div().h_px().bg(rgb(0x404040)))
-                        // Key bindings section
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(rgb(0x4a9eff))
-                                        .child("Keyboard Shortcuts")
-                                )
-                                .child(Self::render_keybinding("Open File", "Cmd+O"))
-                                .child(Self::render_keybinding("Open URL", "Cmd+N"))
-                                .child(Self::render_keybinding("Close Tab", "Cmd+W"))
-                                .child(Self::render_keybinding("Next Tab", "Cmd+]"))
-                                .child(Self::render_keybinding("Previous Tab", "Cmd+["))
-                                .child(Self::render_keybinding("Tab 1-9", "Cmd+1-9"))
-                                .child(Self::render_keybinding("Toggle Metrics", "I"))
-                                .child(Self::render_keybinding("Play/Pause Animation", "Space"))
-                                .child(Self::render_keybinding("Next Frame", "Right Arrow"))
-                                .child(Self::render_keybinding("Previous Frame", "Left Arrow"))
-                                .child(Self::render_keybinding("About", "?"))
-                                .child(Self::render_keybinding("Quit", "Cmd+Q"))
-                        )
-                        .child(div().h_px().bg(rgb(0x404040)))
-                        // Libraries section
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(rgb(0x4a9eff))
-                                        .child("Built With")
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(0xaaaaaa))
-                                        .child("jxl-rs - Pure Rust JPEG XL decoder")
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(0xaaaaaa))
-                                        .child("GPUI - Zed's GPU-accelerated UI framework")
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(0xaaaaaa))
-                                        .child("image-rs - Image encoding/decoding")
-                                )
-                        )
-                        .child(div().h_px().bg(rgb(0x404040)))
-                        // Copyright
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(0x666666))
-                                        .child("Copyright 2024 jxl-rs contributors")
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(0x666666))
-                                        .child("Licensed under BSD-3-Clause")
-                                )
-                        )
-                        // Close button
-                        .child(
-                            div()
-                                .flex()
-                                .justify_center()
-                                .mt_2()
-                                .child(
-                                    div()
-                                        .px_6()
-                                        .py_2()
-                                        .bg(rgb(0x4a9eff))
-                                        .rounded(px(4.0))
-                                        .text_sm()
-                                        .text_color(white())
-                                        .cursor_pointer()
-                                        .hover(|style| style.bg(rgb(0x5aaeFF)))
-                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                                            this.hide_about_dialog(cx);
-                                        }))
-                                        .child("Close")
-                                )
-                        )
-                )
-        )
-    }
-
-    fn render_keybinding(action: &str, keys: &str) -> gpui::Div {
-        div()
-            .flex()
-            .flex_row()
-            .justify_between()
-            .text_xs()
-            .child(
-                div()
-                    .text_color(rgb(0xcccccc))
-                    .child(action.to_string())
-            )
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .bg(rgb(0x1a1a1a))
-                    .rounded(px(3.0))
-                    .text_color(rgb(0x888888))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(keys.to_string())
-            )
-    }
-
     fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
@@ -750,14 +558,6 @@ impl Render for TabBar {
                     return; // Consume all events when dialog is shown
                 }
 
-                // Handle About dialog
-                if this.show_about_dialog {
-                    if event.keystroke.key == "escape" || event.keystroke.key == "enter" {
-                        this.hide_about_dialog(cx);
-                    }
-                    return; // Consume all events when dialog is shown
-                }
-
                 // File operations
                 if event.keystroke.key == "o" && event.keystroke.modifiers.platform {
                     this.open_file_picker(cx);
@@ -804,6 +604,5 @@ impl Render for TabBar {
             .child(self.render_tab_bar(cx))
             .child(self.tabs[active_tab_index].clone())
             .children(self.render_url_dialog(cx))
-            .children(self.render_about_dialog(cx))
     }
 }

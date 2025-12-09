@@ -82,7 +82,6 @@ jxl-ui image1.jxl image2.jxl image3.jxl
 
 - [jxl-rs](https://github.com/libjxl/jxl-rs) - Pure Rust JPEG XL decoder
 - [GPUI](https://gpui.rs) - GPU-accelerated UI framework from Zed
-- [image-rs](https://github.com/image-rs/image) - Image processing
 
 ## License
 
