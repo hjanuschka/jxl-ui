@@ -1,4 +1,4 @@
-use crate::decoder::{worker, DecodeResult, DecodedFrame, ImageMetadata};
+use crate::decoder::{worker, DecodeResult, DecodedFrame, ImageMetadata, ProgressiveUpdate};
 use gpui::{Context, FocusHandle, Focusable, RenderImage, ImageSource, Window, div, img, prelude::*, px, rgb, white};
 use image::{ImageBuffer, RgbaImage};
 use smallvec::SmallVec;
@@ -32,6 +32,8 @@ pub struct ImageTab {
     focus_handle: FocusHandle,
     is_loading: bool, // Track if we're currently decoding
     spinner_phase: usize, // For animated spinner
+    progressive_image: Option<Arc<RenderImage>>, // Intermediate progressive preview
+    progressive_pass: usize, // Current pass being displayed
 }
 
 impl ImageTab {
@@ -50,6 +52,8 @@ impl ImageTab {
             focus_handle,
             is_loading: has_file, // Start loading if we have a file
             spinner_phase: 0,
+            progressive_image: None,
+            progressive_pass: 0,
         };
 
         // Start background decoding if we have a file
@@ -74,24 +78,82 @@ impl ImageTab {
         }).detach();
     }
 
-    /// Start decoding a file in the background
+    /// Start decoding a file in the background with progressive rendering support
     fn start_decoding(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.is_loading = true;
         self.spinner_phase = 0;
+        self.progressive_image = None;
+        self.progressive_pass = 0;
         cx.notify();
 
         // Start spinner animation
         Self::start_spinner_animation(cx);
 
-        // Spawn background task for decoding
+        // Create channel for progressive updates
+        let (sender, receiver) = smol::channel::unbounded::<ProgressiveUpdate>();
+
+        // Spawn task to handle progressive updates
+        cx.spawn({
+            let receiver = receiver.clone();
+            async move |this, cx| {
+                while let Ok(update) = receiver.recv().await {
+                    // Skip non-final updates that are too close together (debounce)
+                    if !update.is_final {
+                        // Convert rgba to render image in background
+                        let rgba_data = update.rgba_data;
+                        let width = update.width;
+                        let height = update.height;
+                        let pass = update.completed_passes;
+
+                        // Create the render image
+                        let render_image = smol::unblock(move || {
+                            // Convert RGBA to BGRA for GPUI
+                            let mut bgra_data = rgba_data;
+                            for pixel in bgra_data.chunks_exact_mut(4) {
+                                pixel.swap(0, 2);
+                            }
+                            let img_buffer: image::RgbaImage = image::ImageBuffer::from_raw(
+                                width,
+                                height,
+                                bgra_data,
+                            ).expect("Failed to create progressive image buffer");
+                            let img_frame = image::Frame::new(img_buffer);
+                            Arc::new(RenderImage::new(SmallVec::from_elem(img_frame, 1)))
+                        }).await;
+
+                        // Update UI with progressive image
+                        let _ = this.update(cx, |this, cx| {
+                            this.progressive_image = Some(render_image);
+                            this.progressive_pass = pass;
+                            cx.notify();
+                        });
+                    }
+                }
+            }
+        }).detach();
+
+        // Spawn background task for decoding with progressive support
         cx.spawn(async move |this, cx| {
             log::info!("Background decoding started for: {:?}", path);
 
-            // Do ALL heavy lifting in background thread (decoding + PNG encoding)
+            // Do ALL heavy lifting in background thread (decoding + image caching)
             let result: Result<(Option<AnimationState>, ImageMetadata), anyhow::Error> = smol::unblock(move || {
-                let decode_result = worker::decode_jxl(&path)?;
+                // Use progressive decode - send updates through channel
+                let decode_result = worker::decode_jxl_progressive(&path, |update: ProgressiveUpdate| {
+                    log::info!(
+                        "Progressive update: pass {}/{}, {}x{}, elapsed {:?}, final: {}",
+                        update.completed_passes,
+                        update.total_passes.map(|t| t.to_string()).unwrap_or_else(|| "?".to_string()),
+                        update.width,
+                        update.height,
+                        update.elapsed,
+                        update.is_final
+                    );
+                    // Send update through channel (ignore errors if receiver dropped)
+                    let _ = sender.send_blocking(update);
+                })?;
 
-                // Pre-cache frames in background thread too (PNG encoding is CPU intensive)
+                // Pre-cache frames in background thread too (conversion is CPU intensive)
                 match decode_result {
                     DecodeResult::SingleFrame { frame, metadata } => {
                         log::info!("Pre-caching single frame...");
@@ -121,6 +183,7 @@ impl ImageTab {
             // Update UI with result (minimal work on main thread)
             this.update(cx, |this, cx| {
                 this.is_loading = false;
+                this.progressive_image = None; // Clear progressive preview
 
                 match result {
                     Ok((animation_state, metadata)) => {
@@ -497,7 +560,68 @@ impl ImageTab {
     }
 
     fn render_loading(&self) -> gpui::Div {
-        // Animated spinner characters (8 phases for smooth rotation)
+        // If we have a progressive image, show it with an overlay
+        if let Some(progressive_img) = &self.progressive_image {
+            return div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .justify_center()
+                .items_center()
+                .relative()
+                .child(
+                    // Progressive image preview
+                    img(ImageSource::Render(progressive_img.clone()))
+                        .max_w_full()
+                        .max_h_full()
+                        .object_fit(gpui::ObjectFit::Contain)
+                )
+                .child(
+                    // Loading overlay in top-left corner
+                    div()
+                        .absolute()
+                        .top_4()
+                        .left_4()
+                        .p_3()
+                        .bg(gpui::rgba(0x000000CC)) // Semi-transparent black
+                        .rounded_lg()
+                        .flex()
+                        .flex_row()
+                        .gap_3()
+                        .items_center()
+                        .child(
+                            // Spinner
+                            {
+                                const SPINNER_CHARS: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+                                let spinner_char = SPINNER_CHARS[self.spinner_phase % SPINNER_CHARS.len()];
+                                div()
+                                    .text_lg()
+                                    .text_color(rgb(0x88aaff))
+                                    .child(spinner_char)
+                            }
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(white())
+                                        .child(format!("Pass {}", self.progressive_pass))
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x888888))
+                                        .child("Progressive rendering...")
+                                )
+                        )
+                );
+        }
+
+        // Fallback: standard spinner when no progressive image available
         const SPINNER_CHARS: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
         let spinner_char = SPINNER_CHARS[self.spinner_phase % SPINNER_CHARS.len()];
 
