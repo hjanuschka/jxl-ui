@@ -223,119 +223,21 @@ if command -v hdiutil &> /dev/null && [ -d "$UNIVERSAL_DIR" ]; then
 fi
 
 # =============================================================================
-# Linux Builds (using cross or native if available)
+# Linux/Windows Builds - Note on GPUI limitations
 # =============================================================================
-
-build_linux() {
-    local TARGET=$1
-    local ARCH_NAME=$2
-
-    print_status "Building for Linux ${ARCH_NAME}..."
-
-    # Check if cross is available for cross-compilation
-    if command -v cross &> /dev/null; then
-        rustup target add "$TARGET" 2>/dev/null || true
-        if cross build --release --target "$TARGET" 2>/dev/null; then
-            LINUX_DIR="$RELEASE_DIR/${APP_NAME}-v${VERSION}-linux-${ARCH_NAME}"
-            mkdir -p "$LINUX_DIR"
-            cp "target/${TARGET}/release/${APP_NAME}" "$LINUX_DIR/"
-            cp README.md "$LINUX_DIR/" 2>/dev/null || true
-            cp LICENSE "$LINUX_DIR/" 2>/dev/null || true
-
-            # Create .desktop file for Linux
-            cat > "$LINUX_DIR/${APP_NAME}.desktop" << DESKTOP
-[Desktop Entry]
-Name=JXL-UI
-Comment=JPEG XL Image Viewer
-Exec=${APP_NAME} %F
-Icon=${APP_NAME}
-Terminal=false
-Type=Application
-Categories=Graphics;Viewer;
-MimeType=image/jxl;
-DESKTOP
-
-            # Copy icon if available
-            if [ -f "assets/icon.png" ]; then
-                cp "assets/icon.png" "$LINUX_DIR/${APP_NAME}.png"
-            fi
-
-            # Create tarball
-            (cd "$RELEASE_DIR" && tar -czvf "${APP_NAME}-v${VERSION}-linux-${ARCH_NAME}.tar.gz" "${APP_NAME}-v${VERSION}-linux-${ARCH_NAME}")
-            print_status "Linux ${ARCH_NAME} build successful"
-            return 0
-        fi
-    fi
-
-    print_warning "Skipping Linux ${ARCH_NAME} build (cross not available or build failed)"
-    print_warning "Install cross with: cargo install cross"
-    return 1
-}
-
-# Try to build Linux targets
-build_linux "x86_64-unknown-linux-gnu" "x86_64" || true
-build_linux "aarch64-unknown-linux-gnu" "arm64" || true
-
-# =============================================================================
-# Windows Builds (using cross or cargo-xwin)
-# =============================================================================
-
-build_windows() {
-    local TARGET=$1
-    local ARCH_NAME=$2
-
-    print_status "Building for Windows ${ARCH_NAME}..."
-
-    # Try cargo-xwin first (better for Windows cross-compilation from macOS)
-    if command -v cargo-xwin &> /dev/null; then
-        rustup target add "$TARGET" 2>/dev/null || true
-        if cargo xwin build --release --target "$TARGET" 2>/dev/null; then
-            WIN_DIR="$RELEASE_DIR/${APP_NAME}-v${VERSION}-windows-${ARCH_NAME}"
-            mkdir -p "$WIN_DIR"
-            cp "target/${TARGET}/release/${APP_NAME}.exe" "$WIN_DIR/"
-            cp README.md "$WIN_DIR/" 2>/dev/null || true
-            cp LICENSE "$WIN_DIR/" 2>/dev/null || true
-
-            # Copy icon if available
-            if [ -f "assets/icon.png" ]; then
-                cp "assets/icon.png" "$WIN_DIR/"
-            fi
-
-            # Create zip
-            (cd "$RELEASE_DIR" && zip -r "${APP_NAME}-v${VERSION}-windows-${ARCH_NAME}.zip" "${APP_NAME}-v${VERSION}-windows-${ARCH_NAME}")
-            print_status "Windows ${ARCH_NAME} build successful"
-            return 0
-        fi
-    fi
-
-    # Try cross as fallback
-    if command -v cross &> /dev/null; then
-        rustup target add "$TARGET" 2>/dev/null || true
-        if cross build --release --target "$TARGET" 2>/dev/null; then
-            WIN_DIR="$RELEASE_DIR/${APP_NAME}-v${VERSION}-windows-${ARCH_NAME}"
-            mkdir -p "$WIN_DIR"
-            cp "target/${TARGET}/release/${APP_NAME}.exe" "$WIN_DIR/"
-            cp README.md "$WIN_DIR/" 2>/dev/null || true
-            cp LICENSE "$WIN_DIR/" 2>/dev/null || true
-
-            if [ -f "assets/icon.png" ]; then
-                cp "assets/icon.png" "$WIN_DIR/"
-            fi
-
-            (cd "$RELEASE_DIR" && zip -r "${APP_NAME}-v${VERSION}-windows-${ARCH_NAME}.zip" "${APP_NAME}-v${VERSION}-windows-${ARCH_NAME}")
-            print_status "Windows ${ARCH_NAME} build successful"
-            return 0
-        fi
-    fi
-
-    print_warning "Skipping Windows ${ARCH_NAME} build (cross/cargo-xwin not available or build failed)"
-    print_warning "Install with: cargo install cross  OR  cargo install cargo-xwin"
-    return 1
-}
-
-# Try to build Windows targets
-build_windows "x86_64-pc-windows-msvc" "x86_64" || true
-build_windows "aarch64-pc-windows-msvc" "arm64" || true
+#
+# GPUI requires platform-native shader compilation:
+# - macOS: Metal shaders (works natively)
+# - Windows: DirectX HLSL shaders (needs Windows SDK)
+# - Linux: Vulkan/SPIR-V shaders (needs Linux tools)
+#
+# Cross-compilation from macOS is NOT possible for GPUI apps.
+# For Linux/Windows builds, use GitHub Actions with native runners.
+# See: .github/workflows/release.yml (if you create one)
+#
+print_status "Note: GPUI requires native shader compilation"
+print_status "Linux/Windows builds require building ON those platforms"
+print_status "Consider GitHub Actions for cross-platform releases"
 
 # =============================================================================
 # Create macOS zip archives
@@ -460,3 +362,20 @@ gh release create "v${VERSION}" \
 
 print_status "Release v${VERSION} published successfully!"
 print_status "View at: https://github.com/${REPO}/releases/tag/v${VERSION}"
+
+# Print summary
+echo ""
+echo "=============================================="
+echo "                BUILD SUMMARY"
+echo "=============================================="
+echo ""
+echo "Artifacts created in: $RELEASE_DIR"
+ls -la "$RELEASE_DIR"/*.zip "$RELEASE_DIR"/*.tar.gz "$RELEASE_DIR"/*.dmg 2>/dev/null | awk '{print "  " $NF}'
+echo ""
+echo "Cross-compilation uses: rustup target add <target> + cargo build --target <target>"
+echo ""
+echo "To enable more platforms, install toolchains:"
+echo "  Linux:   brew install FiloSottile/musl-cross/musl-cross  OR  cargo install cross"
+echo "  Windows: brew install mingw-w64  OR  cargo install cargo-xwin"
+echo ""
+echo "=============================================="
