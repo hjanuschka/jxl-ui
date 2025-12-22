@@ -11,24 +11,70 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev libgtk-3-dev
+
+      - name: Build
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-gnu/release/jxl-ui dist/
+          chmod +x dist/jxl-ui
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jxl-ui-linux-x86_64
+          path: dist/
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Prepare artifact
+        run: |
+          mkdir dist
+          copy target\x86_64-pc-windows-msvc\release\jxl-ui.exe dist\
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jxl-ui-windows-x86_64
+          path: dist/
+
+  build-macos:
     strategy:
       matrix:
         include:
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact: jxl-ui-macos-x86_64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact: jxl-ui-macos-aarch64
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: jxl-ui-linux-x86_64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: jxl-ui-windows-x86_64
+          - target: x86_64-apple-darwin
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            arch: arm64
 
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -38,35 +84,103 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev libgtk-3-dev
-
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Prepare artifact (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Create .app bundle
         run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/jxl-ui dist/
+          APP_NAME="JXL-UI"
+          APP_DIR="dist/${APP_NAME}.app"
 
-      - name: Prepare artifact (Windows)
-        if: matrix.os == 'windows-latest'
+          # Create app bundle structure
+          mkdir -p "${APP_DIR}/Contents/MacOS"
+          mkdir -p "${APP_DIR}/Contents/Resources"
+
+          # Copy binary
+          cp "target/${{ matrix.target }}/release/jxl-ui" "${APP_DIR}/Contents/MacOS/jxl-ui"
+          chmod +x "${APP_DIR}/Contents/MacOS/jxl-ui"
+
+          # Copy icon
+          cp assets/AppIcon.icns "${APP_DIR}/Contents/Resources/AppIcon.icns"
+
+          # Create Info.plist
+          cat > "${APP_DIR}/Contents/Info.plist" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleDisplayName</key>
+              <string>JXL-UI</string>
+              <key>CFBundleExecutable</key>
+              <string>jxl-ui</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.hjanuschka.jxl-ui</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>JXL-UI</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>0.2.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.13</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>NSSupportsAutomaticGraphicsSwitching</key>
+              <true/>
+              <key>CFBundleDocumentTypes</key>
+              <array>
+                  <dict>
+                      <key>CFBundleTypeName</key>
+                      <string>JPEG XL Image</string>
+                      <key>CFBundleTypeRole</key>
+                      <string>Viewer</string>
+                      <key>LSHandlerRank</key>
+                      <string>Default</string>
+                      <key>CFBundleTypeExtensions</key>
+                      <array>
+                          <string>jxl</string>
+                      </array>
+                      <key>LSItemContentTypes</key>
+                      <array>
+                          <string>public.jxl</string>
+                      </array>
+                  </dict>
+              </array>
+          </dict>
+          </plist>
+          PLIST
+
+          # Ad-hoc sign the app
+          codesign --force --deep --sign - "${APP_DIR}"
+
+      - name: Create DMG
         run: |
-          mkdir dist
-          copy target\${{ matrix.target }}\release\jxl-ui.exe dist\
+          # Create a temporary directory for DMG contents
+          mkdir -p dmg-contents
+          cp -R dist/JXL-UI.app dmg-contents/
 
-      - name: Upload artifact
+          # Create a symbolic link to Applications
+          ln -s /Applications dmg-contents/Applications
+
+          # Create the DMG
+          hdiutil create -volname "JXL-UI" -srcfolder dmg-contents -ov -format UDZO "jxl-ui-macos-${{ matrix.arch }}.dmg"
+
+      - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/
+          name: jxl-ui-macos-${{ matrix.arch }}
+          path: "*.dmg"
 
   release:
-    needs: build
+    needs: [build-linux, build-windows, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -78,22 +192,27 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create release archives
+      - name: Prepare release files
         run: |
-          cd artifacts
-          for dir in */; do
-            name="${dir%/}"
-            if [[ "$name" == *windows* ]]; then
-              zip -r "../${name}.zip" "$dir"
-            else
-              tar -czvf "../${name}.tar.gz" "$dir"
-            fi
-          done
+          mkdir -p release
+
+          # Linux - create tar.gz
+          cd artifacts/jxl-ui-linux-x86_64
+          chmod +x jxl-ui
+          tar -czvf ../../release/jxl-ui-linux-x86_64.tar.gz jxl-ui
+          cd ../..
+
+          # Windows - create zip
+          cd artifacts/jxl-ui-windows-x86_64
+          zip -r ../../release/jxl-ui-windows-x86_64.zip jxl-ui.exe
+          cd ../..
+
+          # macOS - DMGs are already in the right format
+          cp artifacts/jxl-ui-macos-arm64/*.dmg release/
+          cp artifacts/jxl-ui-macos-x86_64/*.dmg release/
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            *.tar.gz
-            *.zip
+          files: release/*
           generate_release_notes: true
