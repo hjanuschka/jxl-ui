@@ -1,5 +1,5 @@
 use super::{DecodeResult, DecodedFrame, ImageMetadata};
-use crate::util::rgb_conversion::jxl_to_rgba8;
+use super::rgb_conversion::jxl_to_rgba8;
 use anyhow::Result;
 use jxl::api::{
     states::WithImageInfo,
@@ -53,6 +53,7 @@ pub fn decode_jxl<P: AsRef<Path>>(path: P) -> Result<DecodeResult> {
     options.adjust_orientation = true;
     options.coalescing = true; // Blend frames for animation
     options.premultiply_output = true; // Premultiply alpha for better compositing
+    options.xyb_output_linear = false; // Output sRGB instead of linear
 
     log::info!("Creating JXL decoder...");
     let decoder = JxlDecoder::new(options);
@@ -423,6 +424,7 @@ where
     options.coalescing = true;
     options.enable_flush_pixels = true; // Enable progressive rendering
     options.premultiply_output = true; // Premultiply alpha for better compositing
+    options.xyb_output_linear = false; // Output sRGB instead of linear
 
     log::info!("Progressive decode: Creating JXL decoder, file size: {} bytes", file_size);
     let mut decoder = JxlDecoder::new(options);
@@ -600,9 +602,10 @@ where
                 let progress_pct = (file_size - input.len()) * 100 / file_size;
                 let current_passes = decoder_with_frame.num_completed_passes();
 
-                // Send progressive update when passes change or every 10% progress
+                // Send progressive update when passes change or every 5% progress
+                // Try early updates even before passes complete to show any available pixels
                 let should_update = current_passes > last_passes ||
-                    (progress_pct >= last_progress_pct + 10 && current_passes > 0);
+                    progress_pct >= last_progress_pct + 5;
 
                 if should_update {
                     // Recreate output buffers for flush

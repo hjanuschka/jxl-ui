@@ -1,4 +1,5 @@
 pub mod worker;
+pub mod rgb_conversion;
 
 use std::time::Duration;
 

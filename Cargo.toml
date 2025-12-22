@@ -2,11 +2,11 @@
 name = "jxl-ui"
 version = "0.1.0"
 edition = "2021"
-description = "A native JPEG XL image viewer built with GPUI"
+description = "A cross-platform JPEG XL image viewer built with egui"
 authors = ["Harald Januschka"]
 license = "BSD-3-Clause"
 repository = "https://github.com/hjanuschka/jxl-ui"
-keywords = ["jpeg-xl", "jxl", "image-viewer", "gpui"]
+keywords = ["jpeg-xl", "jxl", "image-viewer", "egui"]
 categories = ["multimedia::images", "gui"]
 
 [[bin]]
@@ -14,37 +14,30 @@ name = "jxl-ui"
 path = "src/main.rs"
 
 [dependencies]
-# JXL decoding from jxl-rs (with flush_pixels() implementation for progressive rendering)
+# JXL decoding
 jxl = { git = "https://github.com/hjanuschka/jxl-rs.git", branch = "flush-pixels-impl" }
 
-# GPUI and UI
-gpui = "0.2"
-rfd = "0.14"
+# egui GUI framework (cross-platform)
+eframe = "0.29"
+egui = "0.29"
+egui_extras = { version = "0.29", features = ["image"] }
 
-# Async & utilities
-smol = "2.0"
+# File picker
+rfd = "0.15"
+
+# Utilities
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"
-reqwest = { version = "0.12", features = ["blocking"] }
-tempfile = "3.0"
 
 # Image processing
 image = "0.25"
 
-# Data structures
-parking_lot = "0.12"
-smallvec = "1.13"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.26"
-objc = "0.2"
+# HTTP for URL loading
+reqwest = { version = "0.12", features = ["blocking"] }
 
 [profile.dev]
-opt-level = 3
-
-[profile.dev.package."*"]
-opt-level = 3
+opt-level = 2
 
 [profile.release]
 opt-level = 3

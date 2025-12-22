@@ -1,9 +1,15 @@
 use jxl::{api::JxlColorType, image::Image};
 
-/// Convert JXL's planar f32 format to interleaved RGBA8 format for GPUI
+/// Convert f32 [0,1] to u8 [0,255]
+#[inline]
+fn f32_to_u8(val: f32) -> u8 {
+    (val * 255.0).clamp(0.0, 255.0) as u8
+}
+
+/// Convert JXL's planar f32 format to interleaved RGBA8 format for egui
 ///
-/// JXL outputs separate channels as f32 values in [0.0, 1.0] range.
-/// GPUI expects interleaved RGBA8 with u8 values in [0, 255] range.
+/// JXL outputs separate channels as f32 values in [0.0, 1.0] range (already sRGB).
+/// egui expects interleaved RGBA8 with u8 values in [0, 255] range.
 ///
 /// # Arguments
 /// * `channels` - Slice of Image<f32> channels (R, G, B, and optionally A)
@@ -33,7 +39,7 @@ pub fn jxl_to_rgba8(
                 let gray_row = channels[0].row(y);
                 for x in 0..width {
                     let idx = (y * width + x) * 4;
-                    let gray = (gray_row[x] * 255.0).clamp(0.0, 255.0) as u8;
+                    let gray = f32_to_u8(gray_row[x]);
 
                     rgba[idx] = gray;     // R
                     rgba[idx + 1] = gray; // G
@@ -54,8 +60,8 @@ pub fn jxl_to_rgba8(
                 let alpha_row = channels[1].row(y);
                 for x in 0..width {
                     let idx = (y * width + x) * 4;
-                    let gray = (gray_row[x] * 255.0).clamp(0.0, 255.0) as u8;
-                    let alpha = (alpha_row[x] * 255.0).clamp(0.0, 255.0) as u8;
+                    let gray = f32_to_u8(gray_row[x]);
+                    let alpha = f32_to_u8(alpha_row[x]);
 
                     rgba[idx] = gray;     // R
                     rgba[idx + 1] = gray; // G
@@ -85,19 +91,19 @@ pub fn jxl_to_rgba8(
 
                     if is_bgr {
                         // BGR -> RGB
-                        rgba[idx] = (row2[x] * 255.0).clamp(0.0, 255.0) as u8;     // R from B channel
-                        rgba[idx + 1] = (row1[x] * 255.0).clamp(0.0, 255.0) as u8; // G
-                        rgba[idx + 2] = (row0[x] * 255.0).clamp(0.0, 255.0) as u8; // B from R channel
+                        rgba[idx] = f32_to_u8(row2[x]);     // R from B channel
+                        rgba[idx + 1] = f32_to_u8(row1[x]); // G
+                        rgba[idx + 2] = f32_to_u8(row0[x]); // B from R channel
                     } else {
                         // RGB
-                        rgba[idx] = (row0[x] * 255.0).clamp(0.0, 255.0) as u8;     // R
-                        rgba[idx + 1] = (row1[x] * 255.0).clamp(0.0, 255.0) as u8; // G
-                        rgba[idx + 2] = (row2[x] * 255.0).clamp(0.0, 255.0) as u8; // B
+                        rgba[idx] = f32_to_u8(row0[x]);     // R
+                        rgba[idx + 1] = f32_to_u8(row1[x]); // G
+                        rgba[idx + 2] = f32_to_u8(row2[x]); // B
                     }
 
                     // Use alpha channel if present, otherwise opaque
                     rgba[idx + 3] = if let Some(alpha_row) = row3 {
-                        (alpha_row[x] * 255.0).clamp(0.0, 255.0) as u8
+                        f32_to_u8(alpha_row[x])
                     } else {
                         255
                     };
@@ -124,16 +130,16 @@ pub fn jxl_to_rgba8(
 
                     if is_bgra {
                         // BGRA -> RGBA
-                        rgba[idx] = (row2[x] * 255.0).clamp(0.0, 255.0) as u8;     // R from B channel
-                        rgba[idx + 1] = (row1[x] * 255.0).clamp(0.0, 255.0) as u8; // G
-                        rgba[idx + 2] = (row0[x] * 255.0).clamp(0.0, 255.0) as u8; // B from R channel
-                        rgba[idx + 3] = (row3[x] * 255.0).clamp(0.0, 255.0) as u8; // A
+                        rgba[idx] = f32_to_u8(row2[x]);     // R from B channel
+                        rgba[idx + 1] = f32_to_u8(row1[x]); // G
+                        rgba[idx + 2] = f32_to_u8(row0[x]); // B from R channel
+                        rgba[idx + 3] = f32_to_u8(row3[x]); // A
                     } else {
                         // RGBA
-                        rgba[idx] = (row0[x] * 255.0).clamp(0.0, 255.0) as u8;     // R
-                        rgba[idx + 1] = (row1[x] * 255.0).clamp(0.0, 255.0) as u8; // G
-                        rgba[idx + 2] = (row2[x] * 255.0).clamp(0.0, 255.0) as u8; // B
-                        rgba[idx + 3] = (row3[x] * 255.0).clamp(0.0, 255.0) as u8; // A
+                        rgba[idx] = f32_to_u8(row0[x]);     // R
+                        rgba[idx + 1] = f32_to_u8(row1[x]); // G
+                        rgba[idx + 2] = f32_to_u8(row2[x]); // B
+                        rgba[idx + 3] = f32_to_u8(row3[x]); // A
                     }
                 }
             }
@@ -150,32 +156,27 @@ mod tests {
 
     #[test]
     fn test_rgb_conversion() {
-        // Create a simple 2x2 RGB image with known values
         let width = 2;
         let height = 2;
 
-        // Red channel: all 1.0 (255)
         let mut r_img = Image::<f32>::new((width, height)).unwrap();
         r_img.fill(1.0_f32);
 
-        // Green channel: all 0.5 (127)
         let mut g_img = Image::<f32>::new((width, height)).unwrap();
         g_img.fill(0.5_f32);
 
-        // Blue channel: all 0.0 (0)
         let mut b_img = Image::<f32>::new((width, height)).unwrap();
         b_img.fill(0.0_f32);
 
         let channels = vec![r_img, g_img, b_img];
         let rgba = jxl_to_rgba8(&channels, JxlColorType::Rgb, width, height);
 
-        // Check first pixel (should be: 255, 127, 0, 255)
-        assert_eq!(rgba[0], 255); // R
-        assert_eq!(rgba[1], 127); // G
-        assert_eq!(rgba[2], 0);   // B
+        // Direct conversion: f32 * 255
+        assert_eq!(rgba[0], 255); // R: 1.0 -> 255
+        assert_eq!(rgba[1], 127); // G: 0.5 -> 127
+        assert_eq!(rgba[2], 0);   // B: 0.0 -> 0
         assert_eq!(rgba[3], 255); // A
 
-        // Verify length
         assert_eq!(rgba.len(), width * height * 4);
     }
 
@@ -190,7 +191,7 @@ mod tests {
         let channels = vec![gray_img];
         let rgba = jxl_to_rgba8(&channels, JxlColorType::Grayscale, width, height);
 
-        // First pixel should be: 127, 127, 127, 255
+        // Direct conversion: 0.5 -> 127
         assert_eq!(rgba[0], 127); // R
         assert_eq!(rgba[1], 127); // G
         assert_eq!(rgba[2], 127); // B
