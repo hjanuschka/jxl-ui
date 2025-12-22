@@ -36,6 +36,9 @@ image = "0.25"
 # HTTP for URL loading
 reqwest = { version = "0.12", features = ["blocking"] }
 
+# Open URLs in browser
+open = "5"
+
 [profile.dev]
 opt-level = 2
 
