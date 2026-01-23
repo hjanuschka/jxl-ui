@@ -943,29 +943,31 @@ fn show_image(ui: &mut egui::Ui, texture: &egui::TextureHandle) {
 }
 
 fn decode_file(path: PathBuf, tx: Sender<DecoderMessage>) {
-    let tx_clone = tx.clone();
-    match decoder::worker::decode_jxl_progressive(&path, move |update| {
-        let _ = tx_clone.send(DecoderMessage::ProgressiveUpdate {
-            rgba: update.rgba_data,
-            width: update.width,
-            height: update.height,
-            completed_passes: update.completed_passes,
-            is_final: update.is_final,
-            elapsed: update.elapsed,
-        });
-    }) {
+    match decoder::worker::decode_jxl(&path) {
         Ok(result) => {
-            if let decoder::DecodeResult::Animation { frames, .. } = result {
-                let total = frames.len();
-                for (i, frame) in frames.into_iter().enumerate() {
-                    let _ = tx.send(DecoderMessage::AnimationFrame {
+            match result {
+                decoder::DecodeResult::SingleFrame { frame, .. } => {
+                    let _ = tx.send(DecoderMessage::ProgressiveUpdate {
                         rgba: frame.rgba_data,
                         width: frame.width,
                         height: frame.height,
-                        duration_ms: frame.duration_ms,
-                        frame_index: i,
-                        total_frames: total,
+                        completed_passes: 1,
+                        is_final: true,
+                        elapsed: frame.decode_time,
                     });
+                }
+                decoder::DecodeResult::Animation { frames, .. } => {
+                    let total = frames.len();
+                    for (i, frame) in frames.into_iter().enumerate() {
+                        let _ = tx.send(DecoderMessage::AnimationFrame {
+                            rgba: frame.rgba_data,
+                            width: frame.width,
+                            height: frame.height,
+                            duration_ms: frame.duration_ms,
+                            frame_index: i,
+                            total_frames: total,
+                        });
+                    }
                 }
             }
             let _ = tx.send(DecoderMessage::Complete);

@@ -1,6 +1,6 @@
 [package]
 name = "jxl-ui"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "A cross-platform JPEG XL image viewer built with egui"
 authors = ["Harald Januschka"]

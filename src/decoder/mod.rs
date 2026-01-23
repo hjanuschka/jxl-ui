@@ -35,20 +35,3 @@ pub enum DecodeResult {
         metadata: ImageMetadata,
     },
 }
-
-/// Progressive update during streaming decode
-#[derive(Clone)]
-pub struct ProgressiveUpdate {
-    /// Current RGBA pixel data (may be partially decoded)
-    pub rgba_data: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-    /// Number of passes completed so far
-    pub completed_passes: usize,
-    /// Total number of passes (if known)
-    pub total_passes: Option<usize>,
-    /// Whether this is the final (fully decoded) frame
-    pub is_final: bool,
-    /// Time elapsed since decode started
-    pub elapsed: Duration,
-}
