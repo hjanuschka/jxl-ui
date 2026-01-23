@@ -2,7 +2,7 @@
 
 mod decoder;
 
-use eframe::egui::{self, Color32, FontId, RichText, Rounding, Stroke, Vec2};
+use eframe::egui::{self, Color32, RichText, Rounding, Stroke, Vec2};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;

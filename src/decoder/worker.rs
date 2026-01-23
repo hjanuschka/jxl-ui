@@ -53,7 +53,6 @@ pub fn decode_jxl<P: AsRef<Path>>(path: P) -> Result<DecodeResult> {
     options.adjust_orientation = true;
     options.coalescing = true; // Blend frames for animation
     options.premultiply_output = true; // Premultiply alpha for better compositing
-    options.xyb_output_linear = false; // Output sRGB instead of linear
 
     log::info!("Creating JXL decoder...");
     let decoder = JxlDecoder::new(options);
@@ -422,9 +421,7 @@ where
     let mut options = JxlDecoderOptions::default();
     options.adjust_orientation = true;
     options.coalescing = true;
-    options.enable_flush_pixels = true; // Enable progressive rendering
     options.premultiply_output = true; // Premultiply alpha for better compositing
-    options.xyb_output_linear = false; // Output sRGB instead of linear
 
     log::info!("Progressive decode: Creating JXL decoder, file size: {} bytes", file_size);
     let mut decoder = JxlDecoder::new(options);
