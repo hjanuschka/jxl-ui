@@ -5,13 +5,13 @@
 <h1 align="center">JXL-UI</h1>
 
 <p align="center">
-  A cross-platform JPEG XL image viewer built with <a href="https://github.com/emilk/egui">egui</a>.
+  A cross-platform JPEG XL image viewer built with <a href="https://github.com/emilk/egui">egui</a> and <a href="https://github.com/libjxl/jxl-rs">jxl-rs</a>.
 </p>
 
 <p align="center">
-  <a href="https://github.com/hjanuschka/jxl-ui/releases">Download</a> •
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
+  <a href="https://github.com/hjanuschka/jxl-ui/releases">Download</a> &bull;
+  <a href="#features">Features</a> &bull;
+  <a href="#installation">Installation</a> &bull;
   <a href="#keyboard-shortcuts">Shortcuts</a>
 </p>
 
@@ -19,30 +19,28 @@
 
 ## Features
 
-- **Cross-platform** - Native apps for macOS, Windows, and Linux
-- **SIMD optimized** - Full SIMD support (SSE4.2, AVX, AVX512, NEON)
-- **Animation support** - Smooth playback of animated JXL files
-- **Multi-tab interface** - Open multiple images with tab navigation
-- **URL support** - Open images directly from URLs
-- **Zoom & pan** - Mouse wheel zoom, click-and-drag panning
-- **Image info** - Toggle metadata overlay with 'i' key
+- **Progressive decoding** -- See images appear tile-by-tile and sharpen pass-by-pass using jxl-rs `flush_pixels()`. LF preview shows a blurry version almost instantly, then detail fills in progressively.
+- **Cross-platform** -- Native apps for macOS (Intel + Apple Silicon), Windows, and Linux
+- **SIMD optimized** -- Full SIMD support (SSE4.2, AVX, AVX512, NEON) via jxl-rs
+- **Animation support** -- Smooth playback of animated JXL files with play/pause controls
+- **Multi-tab interface** -- Open multiple images with tab navigation
+- **Decoder settings** -- Configure output color format (RGB, RGBA, BGR, Grayscale, ...), data type (F32, F16, U16, U8), premultiplied alpha, and high precision mode
+- **Slow Loading Demo** -- Built-in option to simulate slow network loading so you can visualize the progressive rendering passes and tile fill-in
+- **Drag & drop** -- Drop JXL files directly onto the window
+- **Image info panel** -- Dimensions, decode time, speed (MP/s), animation frame info
 
 ## Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| `O` | Open file |
-| `Cmd+N` | Open URL |
+| `Cmd+O` | Open file |
+| `Cmd+T` | New tab |
 | `Cmd+W` | Close tab |
-| `Cmd+[` / `Cmd+]` | Previous/Next tab |
-| `Cmd+1-9` | Switch to tab N |
 | `Space` | Play/Pause animation |
-| `Left` / `Right` | Previous/Next frame |
-| `R` | Reset view |
-| `+` / `-` | Zoom in/out |
-| `I` | Toggle image info |
+| `I` | Toggle image info panel |
+| `S` | Toggle decoder settings panel |
 | `?` | About dialog |
-| `Q` / `Cmd+Q` | Quit |
+| `Escape` | Close dialogs/panels |
 
 ## Installation
 
@@ -79,20 +77,29 @@ cargo +nightly run --release -- path/to/image.jxl
 ```bash
 # Open a single image
 jxl-ui image.jxl
-
-# Open multiple images in tabs
-jxl-ui image1.jxl image2.jxl image3.jxl
 ```
+
+Or launch the app and use **Cmd+O** to open a file, or drag and drop a `.jxl` file onto the window.
+
+### Progressive Decoding
+
+JXL-UI uses the jxl-rs progressive decoding API to show images as they decode:
+
+1. **LF preview** -- A blurry low-frequency preview appears almost immediately
+2. **Tile fill-in** -- Image groups/tiles fill in progressively within each pass
+3. **Pass sharpening** -- Each completed pass sharpens the entire image
+
+To visualize this on fast local files, open **Settings** (`S`) and enable **Slow Loading Demo** with a delay of 5-10ms per chunk.
 
 ## Built With
 
-- [jxl-rs](https://github.com/libjxl/jxl-rs) - Pure Rust JPEG XL decoder
-- [egui](https://github.com/emilk/egui) - Immediate mode GUI framework
-- [eframe](https://github.com/emilk/egui/tree/master/crates/eframe) - egui framework for native apps
+- [jxl-rs](https://github.com/libjxl/jxl-rs) -- Pure Rust JPEG XL decoder with progressive decoding and SIMD support
+- [egui](https://github.com/emilk/egui) -- Immediate mode GUI framework
+- [eframe](https://github.com/emilk/egui/tree/master/crates/eframe) -- egui framework for native apps
 
 ## License
 
-BSD-3-Clause License - see [LICENSE](LICENSE) for details.
+BSD-3-Clause License -- see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
