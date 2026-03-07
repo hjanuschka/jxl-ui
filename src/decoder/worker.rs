@@ -4,8 +4,9 @@ use anyhow::Result;
 use jxl::api::{
     states::WithImageInfo,
     JxlAnimation, JxlBitDepth, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
-    JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    JxlExtraChannel, JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
 };
+use jxl::headers::extra_channels::ExtraChannel;
 use jxl::image::{Image, Rect};
 use std::fs::File;
 use std::io::BufReader;
@@ -16,13 +17,28 @@ use std::time::Instant;
 /// Convert our DecoderSettings to jxl-rs JxlPixelFormat
 fn settings_to_pixel_format(
     settings: &super::DecoderSettings,
-    num_extra_channels: usize,
+    extra_channels: &[JxlExtraChannel],
     native_color_type: JxlColorType,
 ) -> Option<JxlPixelFormat> {
     use super::{OutputColorType, OutputDataType};
 
+    let has_alpha = extra_channels.iter().any(|ec| ec.ec_type == ExtraChannel::Alpha);
+
+    // When Auto, use the native color type but upgrade to include alpha if present.
+    // JXL reports Rgb as native even when the image has an alpha extra channel.
     let color_type = match settings.color_type {
-        OutputColorType::Auto => native_color_type,
+        OutputColorType::Auto => {
+            if has_alpha {
+                match native_color_type {
+                    JxlColorType::Rgb => JxlColorType::Rgba,
+                    JxlColorType::Bgr => JxlColorType::Bgra,
+                    JxlColorType::Grayscale => JxlColorType::GrayscaleAlpha,
+                    other => other, // already includes alpha
+                }
+            } else {
+                native_color_type
+            }
+        }
         OutputColorType::Rgb => JxlColorType::Rgb,
         OutputColorType::Rgba => JxlColorType::Rgba,
         OutputColorType::Bgr => JxlColorType::Bgr,
@@ -43,10 +59,22 @@ fn settings_to_pixel_format(
         OutputDataType::F32 => Some(JxlDataFormat::f32()),
     };
 
+    // When alpha is included in the color type (Rgba, Bgra, GrayscaleAlpha),
+    // we don't need a separate extra channel buffer for it.
+    // Count non-alpha extra channels for extra_channel_format.
+    let non_alpha_extra = extra_channels.iter().filter(|ec| ec.ec_type != ExtraChannel::Alpha).count();
+    let extra_count = if has_alpha && matches!(color_type,
+        JxlColorType::Rgba | JxlColorType::Bgra | JxlColorType::GrayscaleAlpha
+    ) {
+        non_alpha_extra
+    } else {
+        extra_channels.len()
+    };
+
     Some(JxlPixelFormat {
         color_type,
         color_data_format: data_format.clone(),
-        extra_channel_format: vec![data_format; num_extra_channels],
+        extra_channel_format: vec![data_format; extra_count],
     })
 }
 
@@ -524,16 +552,18 @@ where
 
     let basic_info = decoder_with_info.basic_info();
     let (width, height) = basic_info.size;
-    let extra_channels_count = basic_info.extra_channels.len();
     let bit_depth = basic_info.bit_depth.clone();
     let animation = basic_info.animation.clone();
     let native_color_type = decoder_with_info.current_pixel_format().color_type;
 
     // Apply requested pixel format from settings if not Auto
+    let extra_channels: Vec<JxlExtraChannel> = basic_info.extra_channels.clone();
+    let extra_channels_count = extra_channels.len();
+
     // Always set pixel format to ensure buffer type matches data type.
-    // When color_type is Auto, we use the native color type but still set the
-    // data format so that e.g. U8 buffers get U8 data from the decoder.
-    if let Some(requested_format) = settings_to_pixel_format(settings, extra_channels_count, native_color_type) {
+    // When color_type is Auto, we use the native color type but upgrade to
+    // include alpha if the image has an alpha extra channel.
+    if let Some(requested_format) = settings_to_pixel_format(settings, &extra_channels, native_color_type) {
         log::info!(
             "Progressive decode: Setting pixel format to {:?} with data format {:?}",
             requested_format.color_type,
@@ -545,9 +575,20 @@ where
     let pixel_format = decoder_with_info.current_pixel_format();
     let color_type = pixel_format.color_type;
 
+    // Recalculate extra channel buffer count: when alpha is folded into the
+    // color type (Rgba/Bgra/GrayscaleAlpha), we don't need a separate buffer for it.
+    let has_alpha = extra_channels.iter().any(|ec| ec.ec_type == ExtraChannel::Alpha);
+    let extra_buf_count = if has_alpha && matches!(color_type,
+        JxlColorType::Rgba | JxlColorType::Bgra | JxlColorType::GrayscaleAlpha
+    ) {
+        extra_channels.iter().filter(|ec| ec.ec_type != ExtraChannel::Alpha).count()
+    } else {
+        extra_channels_count
+    };
+
     log::info!(
-        "Progressive decode: Image {}x{}, color type: {:?} (native: {:?})",
-        width, height, color_type, native_color_type
+        "Progressive decode: Image {}x{}, color type: {:?} (native: {:?}), extra bufs: {}",
+        width, height, color_type, native_color_type, extra_buf_count
     );
 
     // For animations, fall back to regular decode
@@ -591,7 +632,7 @@ where
         OutputDataType::F32 => {
             // F32 path - use Image<f32>
             let mut main_buffer = Image::<f32>::new((width * samples_per_pixel, height))?;
-            let mut extra_channel_buffers: Vec<Image<f32>> = (0..extra_channels_count)
+            let mut extra_channel_buffers: Vec<Image<f32>> = (0..extra_buf_count)
                 .map(|_| Image::<f32>::new((width, height)))
                 .collect::<Result<Vec<_>, _>>()?;
 
@@ -731,7 +772,7 @@ where
         OutputDataType::U8 => {
             // U8 path - use Image<u8>
             let mut main_buffer = Image::<u8>::new((width * samples_per_pixel, height))?;
-            let mut extra_channel_buffers: Vec<Image<u8>> = (0..extra_channels_count)
+            let mut extra_channel_buffers: Vec<Image<u8>> = (0..extra_buf_count)
                 .map(|_| Image::<u8>::new((width, height)))
                 .collect::<Result<Vec<_>, _>>()?;
 
@@ -866,7 +907,7 @@ where
         OutputDataType::U16 => {
             // U16 path - use Image<u16>
             let mut main_buffer = Image::<u16>::new((width * samples_per_pixel, height))?;
-            let mut extra_channel_buffers: Vec<Image<u16>> = (0..extra_channels_count)
+            let mut extra_channel_buffers: Vec<Image<u16>> = (0..extra_buf_count)
                 .map(|_| Image::<u16>::new((width, height)))
                 .collect::<Result<Vec<_>, _>>()?;
 
@@ -1001,7 +1042,7 @@ where
         OutputDataType::F16 => {
             // F16 path - use Image<u16> as storage (reinterpreted as f16)
             let mut main_buffer = Image::<u16>::new((width * samples_per_pixel, height))?;
-            let mut extra_channel_buffers: Vec<Image<u16>> = (0..extra_channels_count)
+            let mut extra_channel_buffers: Vec<Image<u16>> = (0..extra_buf_count)
                 .map(|_| Image::<u16>::new((width, height)))
                 .collect::<Result<Vec<_>, _>>()?;
 
