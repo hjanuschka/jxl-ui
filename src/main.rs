@@ -880,14 +880,25 @@ impl eframe::App for JxlApp {
             }
         }
 
-        // Info panel (right side)
+        // Info panel (floating overlay)
         if self.show_info {
-            egui::SidePanel::right("info_panel")
+            egui::Window::new("")
+                .id(egui::Id::new("info_panel"))
+                .title_bar(false)
+                .collapsible(false)
                 .resizable(false)
-                .default_width(280.0)
+                .anchor(egui::Align2::RIGHT_TOP, Vec2::new(-12.0, 52.0))
+                .fixed_size(Vec2::new(280.0, 0.0))
                 .frame(egui::Frame::none()
                     .fill(theme::BG_ELEVATED)
+                    .rounding(Rounding::same(12.0))
                     .stroke(Stroke::new(1.0, theme::BORDER))
+                    .shadow(egui::epaint::Shadow {
+                        offset: Vec2::new(0.0, 8.0),
+                        blur: 24.0,
+                        spread: 0.0,
+                        color: Color32::from_black_alpha(80),
+                    })
                     .inner_margin(egui::Margin::same(16.0)))
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -1041,15 +1052,25 @@ impl eframe::App for JxlApp {
                 });
         }
 
-        // Settings panel (left side)
+        // Settings panel (floating overlay)
         let mut should_reload = false;
         if self.show_settings {
-            egui::SidePanel::left("settings_panel")
+            egui::Window::new("")
+                .title_bar(false)
+                .collapsible(false)
                 .resizable(false)
-                .default_width(260.0)
+                .anchor(egui::Align2::LEFT_TOP, Vec2::new(12.0, 52.0))
+                .fixed_size(Vec2::new(260.0, 0.0))
                 .frame(egui::Frame::none()
                     .fill(theme::BG_ELEVATED)
+                    .rounding(Rounding::same(12.0))
                     .stroke(Stroke::new(1.0, theme::BORDER))
+                    .shadow(egui::epaint::Shadow {
+                        offset: Vec2::new(0.0, 8.0),
+                        blur: 24.0,
+                        spread: 0.0,
+                        color: Color32::from_black_alpha(80),
+                    })
                     .inner_margin(egui::Margin::same(16.0)))
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
