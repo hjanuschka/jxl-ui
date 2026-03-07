@@ -212,20 +212,22 @@ impl ImageTab {
         let (tx, rx) = channel();
         self.decoder_rx = Some(rx);
 
-        let settings_clone = settings.clone();
-        let path_clone = path.clone();
-        thread::spawn(move || {
-            decode_file(path_clone, tx, settings_clone);
-        });
-
-        // In compare mode, also spawn a non-progressive decoder
         if compare_mode {
+            // Compare mode: run both decoders sequentially in one thread
+            // so they don't compete for CPU -- fair timing comparison
             let (ref_tx, ref_rx) = channel();
             self.reference_rx = Some(ref_rx);
             self.reference_is_loading = true;
 
             thread::spawn(move || {
+                // 1) Progressive decode first
+                decode_file(path.clone(), tx, settings.clone());
+                // 2) Standard decode after progressive finishes
                 decode_file_standard(path, ref_tx, settings);
+            });
+        } else {
+            thread::spawn(move || {
+                decode_file(path, tx, settings);
             });
         }
     }
