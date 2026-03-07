@@ -166,6 +166,11 @@ struct ImageTab {
     is_loading: bool,
     error: Option<String>,
     decoder_rx: Option<Receiver<DecoderMessage>>,
+    // Compare mode: reference (non-progressive) decode
+    reference_texture: Option<egui::TextureHandle>,
+    reference_decode_time: Option<Duration>,
+    reference_is_loading: bool,
+    reference_rx: Option<Receiver<DecoderMessage>>,
 }
 
 impl ImageTab {
@@ -181,10 +186,14 @@ impl ImageTab {
             is_loading: false,
             error: None,
             decoder_rx: None,
+            reference_texture: None,
+            reference_decode_time: None,
+            reference_is_loading: false,
+            reference_rx: None,
         }
     }
 
-    fn load_file(&mut self, path: PathBuf, settings: DecoderSettings) {
+    fn load_file(&mut self, path: PathBuf, settings: DecoderSettings, compare_mode: bool) {
         self.title = path.file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "Image".to_string());
@@ -195,13 +204,30 @@ impl ImageTab {
         self.dimensions = None;
         self.decode_time = None;
         self.file_path = Some(path.clone());
+        self.reference_texture = None;
+        self.reference_decode_time = None;
+        self.reference_is_loading = false;
+        self.reference_rx = None;
 
         let (tx, rx) = channel();
         self.decoder_rx = Some(rx);
 
+        let settings_clone = settings.clone();
+        let path_clone = path.clone();
         thread::spawn(move || {
-            decode_file(path, tx, settings);
+            decode_file(path_clone, tx, settings_clone);
         });
+
+        // In compare mode, also spawn a non-progressive decoder
+        if compare_mode {
+            let (ref_tx, ref_rx) = channel();
+            self.reference_rx = Some(ref_rx);
+            self.reference_is_loading = true;
+
+            thread::spawn(move || {
+                decode_file_standard(path, ref_tx, settings);
+            });
+        }
     }
 
     fn process_messages(&mut self, ctx: &egui::Context) {
@@ -262,6 +288,35 @@ impl ImageTab {
                 }
             }
         }
+        // Process reference (non-progressive) decoder messages
+        if let Some(rx) = &self.reference_rx {
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    DecoderMessage::ProgressiveUpdate { rgba, width, height, is_final, elapsed, .. } => {
+                        let image = egui::ColorImage::from_rgba_unmultiplied(
+                            [width as usize, height as usize],
+                            &rgba,
+                        );
+                        self.reference_texture = Some(ctx.load_texture(
+                            format!("tab-{}-ref", self.id),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                        if is_final {
+                            self.reference_decode_time = Some(elapsed);
+                            self.reference_is_loading = false;
+                        }
+                    }
+                    DecoderMessage::Complete => {
+                        self.reference_is_loading = false;
+                    }
+                    DecoderMessage::Error(_) => {
+                        self.reference_is_loading = false;
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     fn update_animation(&mut self, ctx: &egui::Context) {
@@ -287,6 +342,7 @@ struct JxlApp {
     show_info: bool,
     show_settings: bool,
     decoder_settings: DecoderSettings,
+    compare_mode: bool,
 }
 
 impl JxlApp {
@@ -299,6 +355,7 @@ impl JxlApp {
             show_info: false,
             show_settings: false,
             decoder_settings: DecoderSettings::default(),
+            compare_mode: false,
         };
 
         if let Some(path) = initial_file {
@@ -314,7 +371,7 @@ impl JxlApp {
     fn open_file_in_new_tab(&mut self, path: PathBuf) {
         let mut tab = ImageTab::new(self.next_tab_id);
         self.next_tab_id += 1;
-        tab.load_file(path, self.decoder_settings.clone());
+        tab.load_file(path, self.decoder_settings.clone(), self.compare_mode);
         self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
     }
@@ -602,6 +659,55 @@ impl eframe::App for JxlApp {
                                     .color(theme::TEXT_MUTED));
                             });
                         });
+                    } else if tab.reference_rx.is_some() || tab.reference_texture.is_some() {
+                        // Compare mode: side-by-side progressive vs standard
+                        ui.columns(2, |cols| {
+                            // Left: Progressive
+                            cols[0].vertical_centered(|ui| {
+                                ui.label(RichText::new("Progressive")
+                                    .size(13.0)
+                                    .color(theme::ACCENT)
+                                    .strong());
+                                if let Some(time) = tab.decode_time {
+                                    ui.label(RichText::new(format!("{:.0}ms", time.as_secs_f64() * 1000.0))
+                                        .size(11.0)
+                                        .color(theme::TEXT_MUTED));
+                                } else if tab.is_loading {
+                                    ui.label(RichText::new("decoding...")
+                                        .size(11.0)
+                                        .color(theme::TEXT_MUTED));
+                                }
+                                ui.add_space(4.0);
+                                if let Some(texture) = &tab.texture {
+                                    show_image(ui, texture);
+                                } else if tab.is_loading {
+                                    ui.spinner();
+                                }
+                            });
+
+                            // Right: Standard (no progressive)
+                            cols[1].vertical_centered(|ui| {
+                                ui.label(RichText::new("Standard")
+                                    .size(13.0)
+                                    .color(theme::TEXT_SECONDARY)
+                                    .strong());
+                                if let Some(time) = tab.reference_decode_time {
+                                    ui.label(RichText::new(format!("{:.0}ms", time.as_secs_f64() * 1000.0))
+                                        .size(11.0)
+                                        .color(theme::TEXT_MUTED));
+                                } else if tab.reference_is_loading {
+                                    ui.label(RichText::new("decoding...")
+                                        .size(11.0)
+                                        .color(theme::TEXT_MUTED));
+                                }
+                                ui.add_space(4.0);
+                                if let Some(texture) = &tab.reference_texture {
+                                    show_image(ui, texture);
+                                } else if tab.reference_is_loading {
+                                    ui.spinner();
+                                }
+                            });
+                        });
                     } else if let Some(anim) = &tab.animation {
                         if let Some(texture) = anim.frames.get(anim.current_frame) {
                             show_image(ui, texture);
@@ -614,7 +720,7 @@ impl eframe::App for JxlApp {
                             ui.vertical_centered(|ui| {
                                 ui.spinner();
                                 ui.add_space(16.0);
-                                ui.label(RichText::new("Loading…")
+                                ui.label(RichText::new("Loading...")
                                     .size(14.0)
                                     .color(theme::TEXT_MUTED));
                             });
@@ -1104,6 +1210,21 @@ impl eframe::App for JxlApp {
                         });
                     }
 
+                    ui.add_space(12.0);
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.compare_mode, "");
+                        ui.label(RichText::new("Compare Mode")
+                            .size(12.0)
+                            .color(theme::TEXT_SECONDARY));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add_space(24.0);
+                        ui.label(RichText::new("Side-by-side: progressive vs standard")
+                            .size(10.0)
+                            .color(theme::TEXT_MUTED));
+                    });
+
                     ui.add_space(24.0);
 
                     // Reload button
@@ -1130,9 +1251,10 @@ impl eframe::App for JxlApp {
         // Reload current image with new settings
         if should_reload {
             let settings = self.decoder_settings.clone();
+            let compare = self.compare_mode;
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 if let Some(path) = tab.file_path.clone() {
-                    tab.load_file(path, settings);
+                    tab.load_file(path, settings, compare);
                 }
             }
         }
@@ -1147,7 +1269,7 @@ impl eframe::App for JxlApp {
         });
 
         // Repaint if loading
-        if self.tabs.iter().any(|t| t.is_loading) {
+        if self.tabs.iter().any(|t| t.is_loading || t.reference_is_loading) {
             ctx.request_repaint();
         }
     }
@@ -1203,6 +1325,39 @@ fn decode_file(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSetti
                         });
                     }
                 }
+            }
+            let _ = tx.send(DecoderMessage::Complete);
+        }
+        Err(e) => {
+            let _ = tx.send(DecoderMessage::Error(e.to_string()));
+        }
+    }
+}
+
+/// Non-progressive decoder for compare mode.
+/// Uses the same chunked decode with slow_delay but does NOT send intermediate
+/// updates -- only the final result. This simulates "no progressive decoding":
+/// user sees nothing until the image is fully decoded.
+fn decode_file_standard(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSettings) {
+    log::info!("Standard decode (compare mode): {:?}", settings);
+    // Use the same progressive decoder internally, but ignore all intermediate callbacks.
+    // The slow_delay still applies so timing is comparable.
+    match decoder::worker::decode_jxl_progressive(&path, &settings, |_update| {
+        // No-op: don't send intermediate updates
+    }) {
+        Ok(result) => {
+            match result {
+                decoder::DecodeResult::SingleFrame { frame, .. } => {
+                    let _ = tx.send(DecoderMessage::ProgressiveUpdate {
+                        rgba: frame.rgba_data,
+                        width: frame.width,
+                        height: frame.height,
+                        completed_passes: 1,
+                        is_final: true,
+                        elapsed: frame.decode_time,
+                    });
+                }
+                _ => {}
             }
             let _ = tx.send(DecoderMessage::Complete);
         }
