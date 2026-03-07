@@ -143,6 +143,7 @@ enum DecoderMessage {
         frame_index: usize,
         total_frames: usize,
     },
+    Started, // signals decoder has begun (used by reference decoder in compare mode)
     Complete,
     Error(String),
 }
@@ -170,6 +171,7 @@ struct ImageTab {
     reference_texture: Option<egui::TextureHandle>,
     reference_decode_time: Option<Duration>,
     reference_is_loading: bool,
+    reference_is_waiting: bool, // true while progressive is still running
     reference_rx: Option<Receiver<DecoderMessage>>,
 }
 
@@ -189,6 +191,7 @@ impl ImageTab {
             reference_texture: None,
             reference_decode_time: None,
             reference_is_loading: false,
+            reference_is_waiting: false,
             reference_rx: None,
         }
     }
@@ -207,6 +210,7 @@ impl ImageTab {
         self.reference_texture = None;
         self.reference_decode_time = None;
         self.reference_is_loading = false;
+        self.reference_is_waiting = false;
         self.reference_rx = None;
 
         let (tx, rx) = channel();
@@ -217,7 +221,7 @@ impl ImageTab {
             // so they don't compete for CPU -- fair timing comparison
             let (ref_tx, ref_rx) = channel();
             self.reference_rx = Some(ref_rx);
-            self.reference_is_loading = true;
+            self.reference_is_waiting = true; // waiting for progressive to finish first
 
             thread::spawn(move || {
                 // 1) Progressive decode first
@@ -236,6 +240,7 @@ impl ImageTab {
         if let Some(rx) = &self.decoder_rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
+                    DecoderMessage::Started => {} // only used by reference decoder
                     DecoderMessage::ProgressiveUpdate { rgba, width, height, completed_passes, is_final, elapsed } => {
                         let image = egui::ColorImage::from_rgba_unmultiplied(
                             [width as usize, height as usize],
@@ -294,6 +299,10 @@ impl ImageTab {
         if let Some(rx) = &self.reference_rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
+                    DecoderMessage::Started => {
+                        self.reference_is_waiting = false;
+                        self.reference_is_loading = true;
+                    }
                     DecoderMessage::ProgressiveUpdate { rgba, width, height, is_final, elapsed, .. } => {
                         let image = egui::ColorImage::from_rgba_unmultiplied(
                             [width as usize, height as usize],
@@ -711,12 +720,32 @@ impl eframe::App for JxlApp {
                                     ui.label(RichText::new("decoding...")
                                         .size(11.0)
                                         .color(theme::TEXT_MUTED));
+                                } else if tab.reference_is_waiting {
+                                    ui.label(RichText::new("waiting...")
+                                        .size(11.0)
+                                        .color(theme::TEXT_MUTED));
                                 }
                                 ui.add_space(4.0);
                                 if let Some(texture) = &tab.reference_texture {
                                     show_image(ui, texture);
                                 } else if tab.reference_is_loading {
                                     ui.spinner();
+                                } else if tab.reference_is_waiting {
+                                    // Show clear waiting state
+                                    let available = ui.available_size();
+                                    let rect = ui.allocate_space(available).1;
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        Rounding::same(4.0),
+                                        Color32::from_rgba_unmultiplied(255, 255, 255, 6),
+                                    );
+                                    ui.painter().text(
+                                        rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        "Waiting for progressive\ndecode to finish...",
+                                        egui::FontId::proportional(14.0),
+                                        theme::TEXT_MUTED,
+                                    );
                                 }
                             });
                         });
@@ -1373,6 +1402,7 @@ fn decode_file(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSetti
 /// user sees nothing until the image is fully decoded.
 fn decode_file_standard(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSettings) {
     log::info!("Standard decode (compare mode): {:?}", settings);
+    let _ = tx.send(DecoderMessage::Started);
     // Use the same progressive decoder internally, but ignore all intermediate callbacks.
     // The slow_delay still applies so timing is comparable.
     match decoder::worker::decode_jxl_progressive(&path, &settings, |_update| {
