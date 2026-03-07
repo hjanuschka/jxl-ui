@@ -48,11 +48,25 @@ fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let initial_file = args.get(1).map(PathBuf::from);
 
+    // Load app icon from embedded PNG
+    let icon_data = {
+        let icon_bytes = include_bytes!("../assets/icon.png");
+        let image = image::load_from_memory(icon_bytes).expect("Failed to load icon");
+        let rgba = image.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        egui::IconData {
+            rgba: rgba.into_raw(),
+            width: w,
+            height: h,
+        }
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])
             .with_title("JXL-UI")
-            .with_decorations(true),
+            .with_decorations(true)
+            .with_icon(std::sync::Arc::new(icon_data)),
         ..Default::default()
     };
 
