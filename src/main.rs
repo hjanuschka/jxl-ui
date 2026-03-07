@@ -1189,12 +1189,6 @@ impl eframe::App for JxlApp {
                     ui.label(RichText::new("OUTPUT COLOR FORMAT")
                         .size(10.0)
                         .color(theme::TEXT_MUTED));
-                    ui.horizontal(|ui| {
-                        ui.add_space(0.0);
-                        ui.label(RichText::new("Auto includes alpha if present.\nUse RGB/BGR to strip alpha and reveal hidden data.")
-                            .size(9.0)
-                            .color(theme::TEXT_MUTED));
-                    });
                     ui.add_space(4.0);
 
                     let color_types = [
