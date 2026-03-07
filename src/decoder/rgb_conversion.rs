@@ -149,6 +149,60 @@ pub fn jxl_to_rgba8(
     rgba
 }
 
+/// Apply post-processing conversion based on requested output color type
+/// This converts the RGBA8 output to simulate different color formats
+pub fn apply_color_conversion(
+    rgba: &mut [u8],
+    target: &super::OutputColorType,
+) {
+    use super::OutputColorType;
+
+    match target {
+        OutputColorType::Auto => {
+            // No conversion needed
+        }
+        OutputColorType::Grayscale | OutputColorType::GrayscaleAlpha => {
+            // Convert to grayscale using luminance formula
+            // Y = 0.299*R + 0.587*G + 0.114*B
+            for pixel in rgba.chunks_exact_mut(4) {
+                let r = pixel[0] as f32;
+                let g = pixel[1] as f32;
+                let b = pixel[2] as f32;
+                let gray = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
+                pixel[0] = gray;
+                pixel[1] = gray;
+                pixel[2] = gray;
+                // Keep alpha as-is, or set to 255 for pure Grayscale
+                if matches!(target, OutputColorType::Grayscale) {
+                    pixel[3] = 255;
+                }
+            }
+        }
+        OutputColorType::Rgb => {
+            // Strip alpha (set to 255)
+            for pixel in rgba.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+        }
+        OutputColorType::Rgba => {
+            // Already RGBA, no conversion needed
+        }
+        OutputColorType::Bgr => {
+            // Swap R and B, strip alpha
+            for pixel in rgba.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+                pixel[3] = 255;
+            }
+        }
+        OutputColorType::Bgra => {
+            // Swap R and B
+            for pixel in rgba.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

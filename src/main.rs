@@ -8,6 +8,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use decoder::{DecoderSettings, OutputColorType, OutputDataType};
+
 // Refined dark theme - inspired by Linear/Raycast
 mod theme {
     use eframe::egui::Color32;
@@ -182,7 +184,7 @@ impl ImageTab {
         }
     }
 
-    fn load_file(&mut self, path: PathBuf) {
+    fn load_file(&mut self, path: PathBuf, settings: DecoderSettings) {
         self.title = path.file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "Image".to_string());
@@ -198,7 +200,7 @@ impl ImageTab {
         self.decoder_rx = Some(rx);
 
         thread::spawn(move || {
-            decode_file(path, tx);
+            decode_file(path, tx, settings);
         });
     }
 
@@ -283,6 +285,8 @@ struct JxlApp {
     next_tab_id: usize,
     show_about: bool,
     show_info: bool,
+    show_settings: bool,
+    decoder_settings: DecoderSettings,
 }
 
 impl JxlApp {
@@ -293,6 +297,8 @@ impl JxlApp {
             next_tab_id: 0,
             show_about: false,
             show_info: false,
+            show_settings: false,
+            decoder_settings: DecoderSettings::default(),
         };
 
         if let Some(path) = initial_file {
@@ -308,7 +314,7 @@ impl JxlApp {
     fn open_file_in_new_tab(&mut self, path: PathBuf) {
         let mut tab = ImageTab::new(self.next_tab_id);
         self.next_tab_id += 1;
-        tab.load_file(path);
+        tab.load_file(path, self.decoder_settings.clone());
         self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
     }
@@ -459,6 +465,16 @@ impl eframe::App for JxlApp {
                             self.show_about = true;
                         }
 
+                        // Settings button
+                        let settings_color = if self.show_settings { theme::ACCENT } else { theme::TEXT_MUTED };
+                        if ui.add(
+                            egui::Button::new(RichText::new("⚙").size(14.0).color(settings_color))
+                                .frame(false)
+                                .min_size(Vec2::new(24.0, 24.0))
+                        ).on_hover_text("Decoder Settings (S)").clicked() {
+                            self.show_settings = !self.show_settings;
+                        }
+
                         // Open button
                         if ui.add(
                             egui::Button::new(RichText::new("Open").size(13.0).color(theme::TEXT_SECONDARY))
@@ -559,10 +575,15 @@ impl eframe::App for JxlApp {
                 if ui.input(|i| i.key_pressed(egui::Key::I)) {
                     self.show_info = !self.show_info;
                 }
+                // Show settings with s key
+                if ui.input(|i| i.key_pressed(egui::Key::S) && !i.modifiers.command) {
+                    self.show_settings = !self.show_settings;
+                }
                 // Escape to close dialogs
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     self.show_about = false;
                     self.show_info = false;
+                    self.show_settings = false;
                 }
 
                 if let Some(tab) = self.tabs.get(self.active_tab) {
@@ -914,6 +935,208 @@ impl eframe::App for JxlApp {
                 });
         }
 
+        // Settings panel (left side)
+        let mut should_reload = false;
+        if self.show_settings {
+            egui::SidePanel::left("settings_panel")
+                .resizable(false)
+                .default_width(260.0)
+                .frame(egui::Frame::none()
+                    .fill(theme::BG_ELEVATED)
+                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .inner_margin(egui::Margin::same(16.0)))
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Decoder Settings")
+                            .size(14.0)
+                            .color(theme::TEXT_PRIMARY)
+                            .strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(
+                                egui::Button::new(RichText::new("✕").size(14.0).color(theme::TEXT_MUTED))
+                                    .frame(false)
+                            ).clicked() {
+                                self.show_settings = false;
+                            }
+                        });
+                    });
+
+                    ui.add_space(16.0);
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            Vec2::new(ui.available_width(), 1.0),
+                        ),
+                        Rounding::ZERO,
+                        theme::BORDER,
+                    );
+                    ui.add_space(16.0);
+
+                    // Output Color Type
+                    ui.label(RichText::new("OUTPUT COLOR FORMAT")
+                        .size(10.0)
+                        .color(theme::TEXT_MUTED));
+                    ui.add_space(4.0);
+
+                    let color_types = [
+                        OutputColorType::Auto,
+                        OutputColorType::Rgba,
+                        OutputColorType::Rgb,
+                        OutputColorType::Bgra,
+                        OutputColorType::Bgr,
+                        OutputColorType::GrayscaleAlpha,
+                        OutputColorType::Grayscale,
+                    ];
+
+                    for ct in &color_types {
+                        let selected = self.decoder_settings.color_type == *ct;
+                        let text_color = if selected { theme::ACCENT } else { theme::TEXT_SECONDARY };
+                        if ui.add(
+                            egui::Button::new(RichText::new(ct.label()).size(12.0).color(text_color))
+                                .fill(if selected { theme::BG_SURFACE } else { Color32::TRANSPARENT })
+                                .frame(false)
+                                .min_size(Vec2::new(ui.available_width(), 24.0))
+                        ).clicked() {
+                            self.decoder_settings.color_type = ct.clone();
+                        }
+                    }
+
+                    ui.add_space(16.0);
+
+                    // Output Data Type
+                    ui.label(RichText::new("OUTPUT DATA FORMAT")
+                        .size(10.0)
+                        .color(theme::TEXT_MUTED));
+                    ui.add_space(4.0);
+
+                    let data_types = [
+                        OutputDataType::F32,
+                        OutputDataType::F16,
+                        OutputDataType::U16,
+                        OutputDataType::U8,
+                    ];
+
+                    for dt in &data_types {
+                        let selected = self.decoder_settings.data_type == *dt;
+                        let text_color = if selected { theme::ACCENT } else { theme::TEXT_SECONDARY };
+                        if ui.add(
+                            egui::Button::new(RichText::new(dt.label()).size(12.0).color(text_color))
+                                .fill(if selected { theme::BG_SURFACE } else { Color32::TRANSPARENT })
+                                .frame(false)
+                                .min_size(Vec2::new(ui.available_width(), 24.0))
+                        ).clicked() {
+                            self.decoder_settings.data_type = dt.clone();
+                        }
+                    }
+
+                    ui.add_space(16.0);
+
+                    // Options
+                    ui.label(RichText::new("OPTIONS")
+                        .size(10.0)
+                        .color(theme::TEXT_MUTED));
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.decoder_settings.premultiply_alpha, "");
+                        ui.label(RichText::new("Premultiply Alpha")
+                            .size(12.0)
+                            .color(theme::TEXT_SECONDARY));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.decoder_settings.linear_output, "");
+                        ui.label(RichText::new("Linear Output (XYB)")
+                            .size(12.0)
+                            .color(theme::TEXT_SECONDARY));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.decoder_settings.high_precision, "");
+                        ui.label(RichText::new("High Precision")
+                            .size(12.0)
+                            .color(theme::TEXT_SECONDARY));
+                    });
+
+                    ui.add_space(16.0);
+
+                    // Progressive demo
+                    ui.label(RichText::new("PROGRESSIVE DEMO")
+                        .size(10.0)
+                        .color(theme::TEXT_MUTED));
+                    ui.add_space(8.0);
+
+                    let mut slow_loading = self.decoder_settings.simulate_slow_ms > 0;
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut slow_loading, "").changed() {
+                            self.decoder_settings.simulate_slow_ms = if slow_loading { 2 } else { 0 };
+                        }
+                        ui.label(RichText::new("Slow Loading Demo")
+                            .size(12.0)
+                            .color(theme::TEXT_SECONDARY));
+                    });
+
+                    if slow_loading {
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(24.0);
+                            ui.label(RichText::new("Delay per chunk (ms):")
+                                .size(11.0)
+                                .color(theme::TEXT_MUTED));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add_space(24.0);
+                            let mut delay = self.decoder_settings.simulate_slow_ms as f32;
+                            if ui.add(
+                                egui::Slider::new(&mut delay, 1.0..=50.0)
+                                    .step_by(1.0)
+                                    .suffix(" ms")
+                            ).changed() {
+                                self.decoder_settings.simulate_slow_ms = delay as u64;
+                            }
+                        });
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(24.0);
+                            ui.label(RichText::new("Simulates slow network to visualize\nprogressive rendering passes")
+                                .size(10.0)
+                                .color(theme::TEXT_MUTED));
+                        });
+                    }
+
+                    ui.add_space(24.0);
+
+                    // Reload button
+                    if ui.add(
+                        egui::Button::new(
+                            RichText::new("⟳ Reload with Settings")
+                                .size(13.0)
+                                .color(theme::TEXT_PRIMARY)
+                        )
+                        .fill(theme::ACCENT)
+                        .rounding(Rounding::same(6.0))
+                        .min_size(Vec2::new(ui.available_width(), 36.0))
+                    ).clicked() {
+                        should_reload = true;
+                    }
+
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Changes apply on reload")
+                        .size(11.0)
+                        .color(theme::TEXT_MUTED));
+                });
+        }
+
+        // Reload current image with new settings
+        if should_reload {
+            let settings = self.decoder_settings.clone();
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                if let Some(path) = tab.file_path.clone() {
+                    tab.load_file(path, settings);
+                }
+            }
+        }
+
         // File drop
         ctx.input(|i| {
             if !i.raw.dropped_files.is_empty() {
@@ -942,8 +1165,19 @@ fn show_image(ui: &mut egui::Ui, texture: &egui::TextureHandle) {
     });
 }
 
-fn decode_file(path: PathBuf, tx: Sender<DecoderMessage>) {
-    match decoder::worker::decode_jxl(&path) {
+fn decode_file(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSettings) {
+    log::info!("Decoding with settings: {:?}", settings);
+    let tx_clone = tx.clone();
+    match decoder::worker::decode_jxl_progressive(&path, &settings, move |update| {
+        let _ = tx_clone.send(DecoderMessage::ProgressiveUpdate {
+            rgba: update.rgba_data,
+            width: update.width,
+            height: update.height,
+            completed_passes: update.completed_passes,
+            is_final: update.is_final,
+            elapsed: update.elapsed,
+        });
+    }) {
         Ok(result) => {
             match result {
                 decoder::DecodeResult::SingleFrame { frame, .. } => {
