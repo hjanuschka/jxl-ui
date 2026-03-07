@@ -636,6 +636,16 @@ impl eframe::App for JxlApp {
                 if ui.input(|i| i.key_pressed(egui::Key::S) && !i.modifiers.command) {
                     self.show_settings = !self.show_settings;
                 }
+                // Reload with current settings (R key)
+                if ui.input(|i| i.key_pressed(egui::Key::R) && !i.modifiers.command) {
+                    let settings = self.decoder_settings.clone();
+                    let compare = self.compare_mode;
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        if let Some(path) = tab.file_path.clone() {
+                            tab.load_file(path, settings, compare);
+                        }
+                    }
+                }
                 // Escape to close dialogs
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     self.show_about = false;
