@@ -28,7 +28,9 @@ mod theme {
 
     // Accent - soft blue
     pub const ACCENT: Color32 = Color32::from_rgb(99, 102, 241);
+    #[allow(dead_code)]
     pub const ACCENT_HOVER: Color32 = Color32::from_rgb(129, 132, 255);
+    #[allow(dead_code)]
     pub const ACCENT_MUTED: Color32 = Color32::from_rgb(99, 102, 241);
 
     // Borders
@@ -143,7 +145,6 @@ enum DecoderMessage {
         frame_index: usize,
         total_frames: usize,
     },
-    Started, // signals decoder has begun (used by reference decoder in compare mode)
     Complete,
     Error(String),
 }
@@ -171,8 +172,11 @@ struct ImageTab {
     reference_texture: Option<egui::TextureHandle>,
     reference_decode_time: Option<Duration>,
     reference_is_loading: bool,
-    reference_is_waiting: bool, // true while progressive is still running
     reference_rx: Option<Receiver<DecoderMessage>>,
+    // Zoom & pan
+    zoom: f32,       // 1.0 = fit-to-window, >1.0 = zoomed in
+    zoom_fit: bool,  // true = auto-fit to window
+    pan: Vec2,       // pan offset in screen pixels
 }
 
 impl ImageTab {
@@ -191,8 +195,10 @@ impl ImageTab {
             reference_texture: None,
             reference_decode_time: None,
             reference_is_loading: false,
-            reference_is_waiting: false,
             reference_rx: None,
+            zoom: 1.0,
+            zoom_fit: true,
+            pan: Vec2::ZERO,
         }
     }
 
@@ -210,23 +216,24 @@ impl ImageTab {
         self.reference_texture = None;
         self.reference_decode_time = None;
         self.reference_is_loading = false;
-        self.reference_is_waiting = false;
         self.reference_rx = None;
 
         let (tx, rx) = channel();
         self.decoder_rx = Some(rx);
 
         if compare_mode {
-            // Compare mode: run both decoders sequentially in one thread
-            // so they don't compete for CPU -- fair timing comparison
             let (ref_tx, ref_rx) = channel();
             self.reference_rx = Some(ref_rx);
-            self.reference_is_waiting = true; // waiting for progressive to finish first
+            self.reference_is_loading = true;
 
+            let settings_clone = settings.clone();
+            let path_clone = path.clone();
+            // Both decoders run in parallel -- jxl-rs is single-threaded
+            // internally so they won't heavily compete for CPU
             thread::spawn(move || {
-                // 1) Progressive decode first
-                decode_file(path.clone(), tx, settings.clone());
-                // 2) Standard decode after progressive finishes
+                decode_file(path_clone, tx, settings_clone);
+            });
+            thread::spawn(move || {
                 decode_file_standard(path, ref_tx, settings);
             });
         } else {
@@ -240,7 +247,6 @@ impl ImageTab {
         if let Some(rx) = &self.decoder_rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
-                    DecoderMessage::Started => {} // only used by reference decoder
                     DecoderMessage::ProgressiveUpdate { rgba, width, height, completed_passes, is_final, elapsed } => {
                         let image = egui::ColorImage::from_rgba_unmultiplied(
                             [width as usize, height as usize],
@@ -299,10 +305,6 @@ impl ImageTab {
         if let Some(rx) = &self.reference_rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
-                    DecoderMessage::Started => {
-                        self.reference_is_waiting = false;
-                        self.reference_is_loading = true;
-                    }
                     DecoderMessage::ProgressiveUpdate { rgba, width, height, is_final, elapsed, .. } => {
                         let image = egui::ColorImage::from_rgba_unmultiplied(
                             [width as usize, height as usize],
@@ -458,7 +460,7 @@ impl eframe::App for JxlApp {
                                 );
                             }
 
-                            ui.allocate_ui_at_rect(rect.shrink(8.0), |ui| {
+                            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect.shrink(8.0)), |ui| {
                                 ui.horizontal_centered(|ui| {
                                     // Loading indicator or icon
                                     if tab.is_loading {
@@ -580,6 +582,19 @@ impl eframe::App for JxlApp {
                                 .color(theme::TEXT_MUTED));
                         }
 
+                        // Zoom indicator
+                        if !tab.zoom_fit || tab.zoom != 1.0 {
+                            ui.label(RichText::new("•").size(12.0).color(theme::TEXT_MUTED));
+                            let zoom_label = if tab.zoom_fit {
+                                format!("Fit x{:.0}%", tab.zoom * 100.0)
+                            } else {
+                                format!("1:1 x{:.0}%", tab.zoom * 100.0)
+                            };
+                            ui.label(RichText::new(zoom_label)
+                                .size(12.0)
+                                .color(theme::ACCENT));
+                        }
+
                         // Animation controls
                         if let Some(anim) = &tab.animation {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -657,6 +672,56 @@ impl eframe::App for JxlApp {
                         }
                     }
                 }
+                // Zoom: 1 = 1:1 pixel, F = fit-to-window, +/- = zoom in/out
+                if ui.input(|i| i.key_pressed(egui::Key::Num1) && !i.modifiers.command) {
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        if tab.dimensions.is_some() {
+                            tab.zoom_fit = false;
+                            tab.zoom = 1.0; // 1:1 pixel mapping
+                            tab.pan = Vec2::ZERO;
+                        }
+                    }
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::F) && !i.modifiers.command) {
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.zoom_fit = true;
+                        tab.zoom = 1.0;
+                        tab.pan = Vec2::ZERO;
+                    }
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)) {
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.zoom *= 1.25;
+                        if tab.zoom_fit && tab.zoom > 1.01 {
+                            tab.zoom_fit = true; // keep fitting but zoomed
+                        }
+                    }
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::Minus)) {
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.zoom = (tab.zoom / 1.25).max(0.1);
+                    }
+                }
+                // Mouse wheel zoom
+                let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll_delta != 0.0 {
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        let factor = if scroll_delta > 0.0 { 1.1 } else { 1.0 / 1.1 };
+                        tab.zoom = (tab.zoom * factor).max(0.1);
+                    }
+                }
+                // Mouse drag to pan
+                let (drag_delta, primary_down) = ui.input(|i| {
+                    (i.pointer.delta(), i.pointer.primary_down())
+                });
+                if primary_down && drag_delta.length() > 0.0 {
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        if !tab.zoom_fit || tab.zoom > 1.01 {
+                            tab.pan += drag_delta;
+                        }
+                    }
+                }
+
                 // Escape to close dialogs
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     self.show_about = false;
@@ -720,32 +785,12 @@ impl eframe::App for JxlApp {
                                     ui.label(RichText::new("decoding...")
                                         .size(11.0)
                                         .color(theme::TEXT_MUTED));
-                                } else if tab.reference_is_waiting {
-                                    ui.label(RichText::new("waiting...")
-                                        .size(11.0)
-                                        .color(theme::TEXT_MUTED));
                                 }
                                 ui.add_space(4.0);
                                 if let Some(texture) = &tab.reference_texture {
                                     show_image(ui, texture);
                                 } else if tab.reference_is_loading {
                                     ui.spinner();
-                                } else if tab.reference_is_waiting {
-                                    // Show clear waiting state
-                                    let available = ui.available_size();
-                                    let rect = ui.allocate_space(available).1;
-                                    ui.painter().rect_filled(
-                                        rect,
-                                        Rounding::same(4.0),
-                                        Color32::from_rgba_unmultiplied(255, 255, 255, 6),
-                                    );
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        "Waiting for progressive\ndecode to finish...",
-                                        egui::FontId::proportional(14.0),
-                                        theme::TEXT_MUTED,
-                                    );
                                 }
                             });
                         });
@@ -754,7 +799,7 @@ impl eframe::App for JxlApp {
                             show_image(ui, texture);
                         }
                     } else if let Some(texture) = &tab.texture {
-                        show_image(ui, texture);
+                        show_image_zoomed(ui, texture, tab.zoom_fit, tab.zoom, tab.pan);
                     } else if tab.is_loading {
                         // Loading state
                         ui.centered_and_justified(|ui| {
@@ -1234,17 +1279,29 @@ impl eframe::App for JxlApp {
                         .color(theme::TEXT_MUTED));
                     ui.add_space(8.0);
 
-                    let mut slow_loading = self.decoder_settings.simulate_slow_ms > 0;
                     ui.horizontal(|ui| {
-                        if ui.checkbox(&mut slow_loading, "").changed() {
-                            self.decoder_settings.simulate_slow_ms = if slow_loading { 2 } else { 0 };
-                        }
+                        ui.checkbox(&mut self.decoder_settings.simulate_slow, "");
                         ui.label(RichText::new("Slow Loading Demo")
                             .size(12.0)
                             .color(theme::TEXT_SECONDARY));
                     });
 
-                    if slow_loading {
+                    if self.decoder_settings.simulate_slow {
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(24.0);
+                            ui.label(RichText::new("Chunk size (% of file):")
+                                .size(11.0)
+                                .color(theme::TEXT_MUTED));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add_space(24.0);
+                            ui.add(
+                                egui::Slider::new(&mut self.decoder_settings.slow_chunk_pct, 0.1..=10.0)
+                                    .step_by(0.1)
+                                    .suffix("%")
+                            );
+                        });
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.add_space(24.0);
@@ -1254,19 +1311,27 @@ impl eframe::App for JxlApp {
                         });
                         ui.horizontal(|ui| {
                             ui.add_space(24.0);
-                            let mut delay = self.decoder_settings.simulate_slow_ms as f32;
+                            let mut delay = self.decoder_settings.slow_delay_ms as f32;
                             if ui.add(
-                                egui::Slider::new(&mut delay, 1.0..=50.0)
+                                egui::Slider::new(&mut delay, 1.0..=500.0)
                                     .step_by(1.0)
                                     .suffix(" ms")
                             ).changed() {
-                                self.decoder_settings.simulate_slow_ms = delay as u64;
+                                self.decoder_settings.slow_delay_ms = delay as u64;
                             }
                         });
                         ui.add_space(4.0);
+                        // Show effective speed
+                        let speed_pct_per_sec = self.decoder_settings.slow_chunk_pct * 1000.0 / self.decoder_settings.slow_delay_ms as f32;
                         ui.horizontal(|ui| {
                             ui.add_space(24.0);
-                            ui.label(RichText::new("Simulates slow network to visualize\nprogressive rendering passes")
+                            ui.label(RichText::new(format!("{:.1}% / sec", speed_pct_per_sec))
+                                .size(11.0)
+                                .color(theme::ACCENT));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add_space(24.0);
+                            ui.label(RichText::new("Simulates slow network to visualize\nprogressive rendering")
                                 .size(10.0)
                                 .color(theme::TEXT_MUTED));
                         });
@@ -1337,16 +1402,40 @@ impl eframe::App for JxlApp {
     }
 }
 
+/// Show image fit-to-window (used in compare mode columns)
 fn show_image(ui: &mut egui::Ui, texture: &egui::TextureHandle) {
+    show_image_zoomed(ui, texture, true, 1.0, Vec2::ZERO);
+}
+
+/// Show image with zoom and pan support
+fn show_image_zoomed(
+    ui: &mut egui::Ui,
+    texture: &egui::TextureHandle,
+    fit: bool,
+    zoom: f32,
+    pan: Vec2,
+) {
     let available = ui.available_size();
     let img_size = texture.size_vec2();
-    let scale = (available.x / img_size.x).min(available.y / img_size.y).min(1.0);
+    let fit_scale = (available.x / img_size.x).min(available.y / img_size.y).min(1.0);
+
+    let scale = if fit {
+        fit_scale * zoom
+    } else {
+        zoom
+    };
     let size = img_size * scale;
 
-    ui.centered_and_justified(|ui| {
-        ui.add(egui::Image::new((texture.id(), size))
-            .rounding(Rounding::same(4.0)));
-    });
+    // Calculate position: centered + pan offset
+    let center = ui.available_rect_before_wrap().center();
+    let top_left = center - size * 0.5 + pan;
+
+    let rect = egui::Rect::from_min_size(top_left, size);
+    let clip_rect = ui.available_rect_before_wrap();
+    ui.set_clip_rect(clip_rect);
+
+    ui.put(rect, egui::Image::new((texture.id(), size))
+        .rounding(Rounding::same(4.0)));
 }
 
 fn decode_file(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSettings) {
@@ -1402,7 +1491,6 @@ fn decode_file(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSetti
 /// user sees nothing until the image is fully decoded.
 fn decode_file_standard(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSettings) {
     log::info!("Standard decode (compare mode): {:?}", settings);
-    let _ = tx.send(DecoderMessage::Started);
     // Use the same progressive decoder internally, but ignore all intermediate callbacks.
     // The slow_delay still applies so timing is comparable.
     match decoder::worker::decode_jxl_progressive(&path, &settings, |_update| {

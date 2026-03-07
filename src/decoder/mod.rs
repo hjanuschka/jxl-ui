@@ -56,8 +56,12 @@ pub struct DecoderSettings {
     pub linear_output: bool,  // xyb_output_linear
     pub high_precision: bool,
     /// Simulate slow network loading to visualize progressive decoding.
-    /// Value is the delay in ms between chunks (0 = off).
-    pub simulate_slow_ms: u64,
+    /// When enabled, chunks are fed at a controlled rate.
+    pub simulate_slow: bool,
+    /// Percentage of the file to feed per chunk (e.g. 1 = 1% per chunk)
+    pub slow_chunk_pct: f32,
+    /// Delay in ms between chunks
+    pub slow_delay_ms: u64,
 }
 
 impl Default for DecoderSettings {
@@ -68,7 +72,9 @@ impl Default for DecoderSettings {
             premultiply_alpha: true,
             linear_output: false,  // sRGB output by default
             high_precision: false,
-            simulate_slow_ms: 0,
+            simulate_slow: false,
+            slow_chunk_pct: 1.0,
+            slow_delay_ms: 100,
         }
     }
 }
@@ -85,6 +91,7 @@ pub struct DecodedFrame {
 
 /// Metadata about the decoded image
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ImageMetadata {
     pub width: u32,
     pub height: u32,
@@ -104,6 +111,7 @@ pub struct ProgressiveUpdate {
     /// Number of passes completed so far
     pub completed_passes: usize,
     /// Total number of passes (if known)
+    #[allow(dead_code)]
     pub total_passes: Option<usize>,
     /// Whether this is the final (fully decoded) frame
     pub is_final: bool,
@@ -112,6 +120,7 @@ pub struct ProgressiveUpdate {
 }
 
 /// Result of decoding an image (single or animated)
+#[allow(dead_code)]
 pub enum DecodeResult {
     SingleFrame {
         frame: DecodedFrame,

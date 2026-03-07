@@ -17,16 +17,12 @@ use std::time::Instant;
 fn settings_to_pixel_format(
     settings: &super::DecoderSettings,
     num_extra_channels: usize,
+    native_color_type: JxlColorType,
 ) -> Option<JxlPixelFormat> {
     use super::{OutputColorType, OutputDataType};
 
-    // If Auto, don't set a pixel format - use native
-    if settings.color_type == OutputColorType::Auto {
-        return None;
-    }
-
     let color_type = match settings.color_type {
-        OutputColorType::Auto => return None,
+        OutputColorType::Auto => native_color_type,
         OutputColorType::Rgb => JxlColorType::Rgb,
         OutputColorType::Rgba => JxlColorType::Rgba,
         OutputColorType::Bgr => JxlColorType::Bgr,
@@ -469,13 +465,18 @@ where
     file.read_to_end(&mut file_data)?;
 
     // Use chunks for progressive decoding - smaller chunks = more frequent updates
-    let slow_delay = if settings.simulate_slow_ms > 0 {
-        Some(std::time::Duration::from_millis(settings.simulate_slow_ms))
+    let slow_delay = if settings.simulate_slow {
+        Some(std::time::Duration::from_millis(settings.slow_delay_ms))
     } else {
         None
     };
-    // Use smaller chunks in slow mode for more granular progressive display
-    let chunk_size = if slow_delay.is_some() { 4 * 1024 } else { 16 * 1024 };
+    // In slow mode, chunk size is a percentage of file size (min 1KB)
+    // In normal mode, use 16KB fixed chunks
+    let chunk_size = if settings.simulate_slow {
+        ((file_size as f32 * settings.slow_chunk_pct / 100.0) as usize).max(1024)
+    } else {
+        16 * 1024
+    };
     let mut input = &file_data[..];
     let mut chunk_input = &input[0..0];
 
@@ -529,7 +530,10 @@ where
     let native_color_type = decoder_with_info.current_pixel_format().color_type;
 
     // Apply requested pixel format from settings if not Auto
-    if let Some(requested_format) = settings_to_pixel_format(settings, extra_channels_count) {
+    // Always set pixel format to ensure buffer type matches data type.
+    // When color_type is Auto, we use the native color type but still set the
+    // data format so that e.g. U8 buffers get U8 data from the decoder.
+    if let Some(requested_format) = settings_to_pixel_format(settings, extra_channels_count, native_color_type) {
         log::info!(
             "Progressive decode: Setting pixel format to {:?} with data format {:?}",
             requested_format.color_type,

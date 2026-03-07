@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 # JXL decoding
-jxl = { git = "https://github.com/libjxl/jxl-rs.git", branch = "main", features = ["all-simd"] }
+jxl = { git = "https://github.com/hjanuschka/jxl-rs.git", branch = "main-pr697", features = ["all-simd"] }
 
 # egui GUI framework (cross-platform)
 eframe = "0.29"

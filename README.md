@@ -25,7 +25,7 @@
 - **Animation support** -- Smooth playback of animated JXL files with play/pause controls
 - **Multi-tab interface** -- Open multiple images with tab navigation
 - **Decoder settings** -- Configure output color format (RGB, RGBA, BGR, Grayscale, ...), data type (F32, F16, U16, U8), premultiplied alpha, and high precision mode
-- **Slow Loading Demo** -- Built-in option to simulate slow network loading so you can visualize the progressive rendering passes and tile fill-in
+- **Slow Loading Demo** -- Simulate slow network loading with configurable chunk size (% of file) and delay (ms per chunk) to visualize progressive rendering
 - **Drag & drop** -- Drop JXL files directly onto the window
 - **Image info panel** -- Dimensions, decode time, speed (MP/s), animation frame info
 
@@ -39,8 +39,14 @@
 | `Space` | Play/Pause animation |
 | `I` | Toggle image info panel |
 | `S` | Toggle decoder settings panel |
+| `R` | Reload with current settings |
+| `1` | 1:1 pixel zoom |
+| `F` | Fit to window |
+| `+` / `-` | Zoom in / out |
 | `?` | About dialog |
 | `Escape` | Close dialogs/panels |
+
+Mouse wheel zooms, click and drag to pan when zoomed in.
 
 ## Installation
 
@@ -89,7 +95,7 @@ JXL-UI uses the jxl-rs progressive decoding API to show images as they decode:
 2. **Tile fill-in** -- Image groups/tiles fill in progressively within each pass
 3. **Pass sharpening** -- Each completed pass sharpens the entire image
 
-To visualize this on fast local files, open **Settings** (`S`) and enable **Slow Loading Demo** with a delay of 5-10ms per chunk.
+To visualize this on fast local files, open **Settings** (`S`) and enable **Slow Loading Demo** -- e.g. set 1% chunk size and 100ms delay for ~10% per second.
 
 ## Built With
 

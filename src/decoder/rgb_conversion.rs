@@ -151,6 +151,7 @@ pub fn jxl_to_rgba8(
 
 /// Apply post-processing conversion based on requested output color type
 /// This converts the RGBA8 output to simulate different color formats
+#[allow(dead_code)]
 pub fn apply_color_conversion(
     rgba: &mut [u8],
     target: &super::OutputColorType,
