@@ -59,22 +59,24 @@ fn settings_to_pixel_format(
         OutputDataType::F32 => Some(JxlDataFormat::f32()),
     };
 
-    // When alpha is included in the color type (Rgba, Bgra, GrayscaleAlpha),
-    // we don't need a separate extra channel buffer for it.
-    // Count non-alpha extra channels for extra_channel_format.
-    let non_alpha_extra = extra_channels.iter().filter(|ec| ec.ec_type != ExtraChannel::Alpha).count();
-    let extra_count = if has_alpha && matches!(color_type,
+    // extra_channel_format must have exactly num_extra_channels entries.
+    // When alpha is folded into the color type (Rgba/Bgra/GrayscaleAlpha),
+    // set the alpha entry to None (no separate buffer), others get the data format.
+    let alpha_folded = has_alpha && matches!(color_type,
         JxlColorType::Rgba | JxlColorType::Bgra | JxlColorType::GrayscaleAlpha
-    ) {
-        non_alpha_extra
-    } else {
-        extra_channels.len()
-    };
+    );
+    let extra_channel_format: Vec<Option<JxlDataFormat>> = extra_channels.iter().map(|ec| {
+        if alpha_folded && ec.ec_type == ExtraChannel::Alpha {
+            None // alpha is in the main color buffer
+        } else {
+            data_format.clone()
+        }
+    }).collect();
 
     Some(JxlPixelFormat {
         color_type,
-        color_data_format: data_format.clone(),
-        extra_channel_format: vec![data_format; extra_count],
+        color_data_format: data_format,
+        extra_channel_format,
     })
 }
 
@@ -575,12 +577,13 @@ where
     let pixel_format = decoder_with_info.current_pixel_format();
     let color_type = pixel_format.color_type;
 
-    // Recalculate extra channel buffer count: when alpha is folded into the
-    // color type (Rgba/Bgra/GrayscaleAlpha), we don't need a separate buffer for it.
+    // Count extra channel buffers needed: alpha folded into main buffer gets None,
+    // so only count non-alpha extra channels that need their own buffer.
     let has_alpha = extra_channels.iter().any(|ec| ec.ec_type == ExtraChannel::Alpha);
-    let extra_buf_count = if has_alpha && matches!(color_type,
+    let alpha_folded = has_alpha && matches!(color_type,
         JxlColorType::Rgba | JxlColorType::Bgra | JxlColorType::GrayscaleAlpha
-    ) {
+    );
+    let extra_buf_count = if alpha_folded {
         extra_channels.iter().filter(|ec| ec.ec_type != ExtraChannel::Alpha).count()
     } else {
         extra_channels_count
