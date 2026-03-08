@@ -126,7 +126,7 @@ jobs:
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
-              <string>0.5.2</string>
+              <string>0.5.3</string>
               <key>CFBundleVersion</key>
               <string>1</string>
               <key>LSMinimumSystemVersion</key>
@@ -179,8 +179,52 @@ jobs:
           name: jxl-ui-macos-${{ matrix.arch }}
           path: "*.dmg"
 
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK/NDK components
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.1.12297006"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Android native libraries
+        working-directory: mobile/android
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/27.1.12297006"
+          ./build-rust.sh
+
+      - name: Build APK (release)
+        working-directory: mobile/android
+        run: ./gradlew assembleRelease
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jxl-ui-android-apk
+          path: mobile/android/app/build/outputs/apk/release/*.apk
+
   release:
-    needs: [build-linux, build-windows, build-macos]
+    needs: [build-linux, build-windows, build-macos, build-android]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -210,6 +254,9 @@ jobs:
           # macOS - DMGs are already in the right format
           cp artifacts/jxl-ui-macos-arm64/*.dmg release/
           cp artifacts/jxl-ui-macos-x86_64/*.dmg release/
+
+          # Android - upload release APK
+          cp artifacts/jxl-ui-android-apk/*.apk release/
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
