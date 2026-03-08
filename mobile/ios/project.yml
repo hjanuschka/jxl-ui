@@ -1,0 +1,29 @@
+name: JxlUI
+options:
+  bundleIdPrefix: com.jxlui
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+
+settings:
+  SWIFT_OBJC_BRIDGING_HEADER: JxlUI/BridgingHeader.h
+  OTHER_LDFLAGS: ["-lz"]
+
+targets:
+  JxlUI:
+    type: application
+    platform: iOS
+    sources:
+      - path: JxlUI
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.jxlui.app
+      INFOPLIST_FILE: JxlUI/Info.plist
+      MARKETING_VERSION: "0.1.0"
+      CURRENT_PROJECT_VERSION: 1
+      SWIFT_OBJC_BRIDGING_HEADER: JxlUI/BridgingHeader.h
+      LIBRARY_SEARCH_PATHS:
+        - "$(PROJECT_DIR)/lib/JxlMobileCore.xcframework"
+      HEADER_SEARCH_PATHS:
+        - "$(PROJECT_DIR)/../jxl-core"
+    dependencies:
+      - framework: lib/JxlMobileCore.xcframework

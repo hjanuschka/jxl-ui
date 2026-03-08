@@ -1,0 +1,21 @@
+[package]
+name = "jxl-mobile-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "jxl_mobile_core"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+jxl = { git = "https://github.com/hjanuschka/jxl-rs.git", branch = "main-pr697", features = ["all-simd"] }
+jni = { version = "0.21", optional = true }
+
+[features]
+default = []
+android = ["jni"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

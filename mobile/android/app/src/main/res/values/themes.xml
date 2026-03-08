@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.JxlUI" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#FF111113</item>
+        <item name="android:navigationBarColor">#FF111113</item>
+    </style>
+</resources>

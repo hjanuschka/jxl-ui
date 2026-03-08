@@ -725,11 +725,16 @@ impl eframe::App for JxlApp {
                     }
                 }
                 // Mouse wheel zoom -- zoom toward cursor position
+                // Only zoom when pointer is over the image area (not over floating panels)
                 let content_rect = ui.available_rect_before_wrap();
                 let (scroll_delta, pointer_pos) = ui.input(|i| {
                     (i.smooth_scroll_delta.y, i.pointer.hover_pos())
                 });
-                if scroll_delta != 0.0 {
+                // Don't zoom when pointer is over a floating panel (settings/info/about)
+                let pointer_over_panel = ctx.layer_id_at(
+                    pointer_pos.unwrap_or_default()
+                ).map_or(false, |layer| layer.order == egui::Order::Middle);
+                if scroll_delta != 0.0 && !pointer_over_panel {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                         let old_zoom = tab.zoom;
                         let factor = if scroll_delta > 0.0 { 1.1 } else { 1.0 / 1.1 };
