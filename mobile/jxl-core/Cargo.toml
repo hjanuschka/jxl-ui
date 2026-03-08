@@ -8,7 +8,7 @@ name = "jxl_mobile_core"
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
-jxl = { git = "https://github.com/hjanuschka/jxl-rs.git", branch = "main-pr697", features = ["all-simd"] }
+jxl = { git = "https://github.com/hjanuschka/jxl-rs.git", branch = "main-pr697-pr678", features = ["all-simd"] }
 half = "2"
 jni = { version = "0.21", optional = true }
 
