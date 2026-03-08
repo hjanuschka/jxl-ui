@@ -1187,7 +1187,9 @@ impl eframe::App for JxlApp {
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::LEFT_TOP, Vec2::new(12.0, 52.0))
-                .fixed_size(Vec2::new(260.0, 0.0))
+                .min_width(260.0)
+                .max_width(260.0)
+                .max_height(ctx.screen_rect().height() - 80.0)
                 .frame(egui::Frame::none()
                     .fill(theme::BG_ELEVATED)
                     .rounding(Rounding::same(12.0))
@@ -1214,6 +1216,10 @@ impl eframe::App for JxlApp {
                             }
                         });
                     });
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // Ensure content fills width inside scroll area
+                        ui.set_min_width(ui.available_width());
 
                     ui.add_space(16.0);
                     ui.painter().rect_filled(
@@ -1413,6 +1419,7 @@ impl eframe::App for JxlApp {
                     ui.label(RichText::new("Changes apply on reload")
                         .size(11.0)
                         .color(theme::TEXT_MUTED));
+                    }); // end ScrollArea
                 });
         }
 
