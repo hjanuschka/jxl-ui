@@ -1007,24 +1007,39 @@ mod android {
             Err(_) => return JObject::null().into_raw(),
         };
 
+        // Throttle: only send every Nth callback to avoid OOM on large images.
+        // For a 4064x2704 image, each pixel buffer is ~44MB. We limit to ~20 updates max.
+        let mut last_sent_pct: i32 = -1;
+        let min_pct_step = 5i32; // at least 5% between updates
+
         let decoded = decode_jxl_progressive(
             &bytes,
             &settings,
             |update| {
+                let pct = update.progress_pct as i32;
+                // Throttle: only send if pct moved enough or it's the first/final
+                if pct - last_sent_pct < min_pct_step && !update.is_final && last_sent_pct >= 0 {
+                    return;
+                }
+                last_sent_pct = pct;
+
                 if let Ok(mut cb_env) = jvm.attach_current_thread() {
                     if let Ok(pixel_array) = cb_env.byte_array_from_slice(&update.pixels) {
+                        let pixel_obj: JObject = pixel_array.into();
                         let _ = cb_env.call_method(
                             &listener_global,
                             "onProgress",
                             "([BIIII)V",
                             &[
-                                JValue::Object(&pixel_array.into()),
+                                JValue::Object(&pixel_obj),
                                 JValue::Int(update.width as i32),
                                 JValue::Int(update.height as i32),
                                 JValue::Int(update.completed_passes as i32),
                                 JValue::Int(update.progress_pct as i32),
                             ],
                         );
+                        // Explicitly delete local ref to free memory immediately
+                        let _ = cb_env.delete_local_ref(pixel_obj);
                     }
                 }
             },

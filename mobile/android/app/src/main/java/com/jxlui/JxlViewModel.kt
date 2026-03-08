@@ -236,12 +236,14 @@ class JxlViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             val elapsed = (System.nanoTime() - startTime) / 1_000_000
+            android.util.Log.d("JxlDecode", "Progressive decode finished in ${elapsed}ms for $name")
             val current = _state.value
             _state.value = current.copy(
                 decodeTimeMs = elapsed,
                 isProgressive = false,
                 progressPct = 100,
             )
+            android.util.Log.d("JxlDecode", "State updated: decodeTimeMs=${_state.value.decodeTimeMs}")
         }
     }
 }

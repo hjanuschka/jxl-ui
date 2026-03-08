@@ -363,7 +363,10 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     Text("${state.width}x${state.height}", color = TextDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                    Text("${state.decodeTimeMs}ms", color = TextDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    Text(
+                        if (state.decodeTimeMs > 0) "${state.decodeTimeMs}ms" else "...",
+                        color = TextDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+                    )
                     if (state.isAnimation) Text("${state.frameCount}f", color = TextDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                     if (settings.simulateSlow) Text("progressive", color = Accent.copy(alpha = 0.7f), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                     Spacer(Modifier.weight(1f))

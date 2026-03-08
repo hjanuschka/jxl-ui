@@ -97,18 +97,13 @@ object JxlDecoder {
     }
 
     private fun pixelsToBitmap(pixels: ByteArray, width: Int, height: Int): Bitmap? {
-        if (pixels.size < width * height * 4) return null
+        val expected = width * height * 4
+        if (pixels.size < expected) return null
+        // RGBA -> ARGB_8888 in-place swizzle (ARGB_8888 is actually RGBA in little-endian)
+        // Android Bitmap.Config.ARGB_8888 stores pixels as RGBA in ByteBuffer on little-endian
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val intPixels = IntArray(width * height)
-        for (i in intPixels.indices) {
-            val offset = i * 4
-            val r = pixels[offset].toInt() and 0xFF
-            val g = pixels[offset + 1].toInt() and 0xFF
-            val b = pixels[offset + 2].toInt() and 0xFF
-            val a = pixels[offset + 3].toInt() and 0xFF
-            intPixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
-        }
-        bitmap.setPixels(intPixels, 0, width, 0, 0, width, height)
+        val buffer = java.nio.ByteBuffer.wrap(pixels, 0, expected)
+        bitmap.copyPixelsFromBuffer(buffer)
         return bitmap
     }
 }
