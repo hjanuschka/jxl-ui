@@ -26,6 +26,7 @@ object JxlDecoder {
         premultiplyAlpha: Byte,
         linearOutput: Byte,
         highPrecision: Byte,
+        simulateSlow: Byte,
         slowChunkPct: Float,
         slowDelayMs: Long,
         listener: ProgressListener,
@@ -80,6 +81,7 @@ object JxlDecoder {
             if (settings.premultiplyAlpha) 1 else 0,
             if (settings.linearOutput) 1 else 0,
             if (settings.highPrecision) 1 else 0,
+            if (settings.simulateSlow) 1 else 0,
             settings.slowChunkPct,
             settings.slowDelayMs,
             object : ProgressListener {
@@ -92,16 +94,35 @@ object JxlDecoder {
     }
 
     /** Public version for ViewModel use. */
-    fun pixelsToBitmapPublic(pixels: ByteArray, width: Int, height: Int): Bitmap? {
-        return pixelsToBitmap(pixels, width, height)
+    fun pixelsToBitmapPublic(
+        pixels: ByteArray,
+        width: Int,
+        height: Int,
+        reusable: Bitmap? = null,
+    ): Bitmap? {
+        return pixelsToBitmap(pixels, width, height, reusable)
     }
 
-    private fun pixelsToBitmap(pixels: ByteArray, width: Int, height: Int): Bitmap? {
+    private fun pixelsToBitmap(
+        pixels: ByteArray,
+        width: Int,
+        height: Int,
+        reusable: Bitmap? = null,
+    ): Bitmap? {
         val expected = width * height * 4
         if (pixels.size < expected) return null
-        // RGBA -> ARGB_8888 in-place swizzle (ARGB_8888 is actually RGBA in little-endian)
-        // Android Bitmap.Config.ARGB_8888 stores pixels as RGBA in ByteBuffer on little-endian
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+
+        val bitmap = if (
+            reusable != null &&
+            !reusable.isRecycled &&
+            reusable.width == width &&
+            reusable.height == height
+        ) {
+            reusable
+        } else {
+            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        }
+
         val buffer = java.nio.ByteBuffer.wrap(pixels, 0, expected)
         bitmap.copyPixelsFromBuffer(buffer)
         return bitmap

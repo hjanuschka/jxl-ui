@@ -3,8 +3,10 @@ package com.jxlui
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -12,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 
 data class ImageState(
     val bitmap: Bitmap? = null,
@@ -68,14 +71,22 @@ data class DecoderSettings(
 )
 
 class JxlViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        private const val TAG = "JxlDecode"
+    }
+
     private val _state = MutableStateFlow(ImageState())
     val state: StateFlow<ImageState> = _state
 
     val settings = MutableStateFlow(DecoderSettings())
 
     private var animationJob: Job? = null
+    private var decodeJob: Job? = null
+    private val decodeGeneration = AtomicLong(0)
+
     private var lastLoadedData: ByteArray? = null
     private var lastLoadedName: String? = null
+    private var reusableProgressiveBitmap: Bitmap? = null
 
     val sampleFiles: List<String> by lazy {
         try {
@@ -88,30 +99,57 @@ class JxlViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun startNewDecode(fileName: String?): Long {
+        decodeJob?.cancel()
+        val generation = decodeGeneration.incrementAndGet()
+        stopAnimation()
+        reusableProgressiveBitmap = null
+        _state.value = ImageState(isLoading = true, fileName = fileName)
+        return generation
+    }
+
+    private fun isCurrentDecode(generation: Long): Boolean {
+        return decodeGeneration.get() == generation
+    }
+
     fun loadFromUri(uri: Uri, fileName: String? = null) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = ImageState(isLoading = true, fileName = fileName)
+        val generation = startNewDecode(fileName)
+        decodeJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
                 val inputStream = context.contentResolver.openInputStream(uri)
                     ?: throw Exception("Cannot open file")
                 val data = inputStream.readBytes()
                 inputStream.close()
-                decodeAndEmit(data, fileName ?: "image.jxl")
+                if (!isCurrentDecode(generation)) return@launch
+
+                Log.i(TAG, "loadFromUri: name=${fileName ?: "image.jxl"}, bytes=${data.size}")
+                decodeAndEmit(data, fileName ?: "image.jxl", generation)
+            } catch (_: CancellationException) {
+                Log.i(TAG, "loadFromUri cancelled")
             } catch (e: Exception) {
+                if (!isCurrentDecode(generation)) return@launch
+                Log.e(TAG, "loadFromUri failed", e)
                 _state.value = ImageState(error = e.message ?: "Unknown error")
             }
         }
     }
 
     fun loadSample(name: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = ImageState(isLoading = true, fileName = name)
+        val generation = startNewDecode(name)
+        decodeJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
                 val data = context.assets.open("samples/$name").readBytes()
-                decodeAndEmit(data, name)
+                if (!isCurrentDecode(generation)) return@launch
+
+                Log.i(TAG, "loadSample: name=$name, bytes=${data.size}")
+                decodeAndEmit(data, name, generation)
+            } catch (_: CancellationException) {
+                Log.i(TAG, "loadSample cancelled: $name")
             } catch (e: Exception) {
+                if (!isCurrentDecode(generation)) return@launch
+                Log.e(TAG, "loadSample failed for $name", e)
                 _state.value = ImageState(error = e.message ?: "Unknown error")
             }
         }
@@ -121,19 +159,27 @@ class JxlViewModel(application: Application) : AndroidViewModel(application) {
     fun reload() {
         val data = lastLoadedData ?: return
         val name = lastLoadedName ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = ImageState(isLoading = true, fileName = name)
+        val generation = startNewDecode(name)
+        decodeJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                decodeAndEmit(data, name)
+                decodeAndEmit(data, name, generation)
+            } catch (_: CancellationException) {
+                Log.i(TAG, "reload cancelled: $name")
             } catch (e: Exception) {
+                if (!isCurrentDecode(generation)) return@launch
                 _state.value = ImageState(error = e.message ?: "Unknown error")
             }
         }
     }
 
     fun clearImage() {
+        decodeJob?.cancel()
+        decodeJob = null
+        decodeGeneration.incrementAndGet()
         stopAnimation()
+        reusableProgressiveBitmap = null
         _state.value = ImageState()
+        Log.i(TAG, "clearImage: cancelled active decode")
     }
 
     fun togglePlayPause() {
@@ -173,22 +219,27 @@ class JxlViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(isPlaying = false)
     }
 
-    private fun decodeAndEmit(data: ByteArray, name: String) {
+    private fun decodeAndEmit(data: ByteArray, name: String, generation: Long) {
+        if (!isCurrentDecode(generation)) return
+
         lastLoadedData = data
         lastLoadedName = name
 
         val startTime = System.nanoTime()
         val s = settings.value
+        reusableProgressiveBitmap = null
 
         // Check if animation
         val isAnim = JxlDecoder.isAnimation(data)
 
         if (isAnim) {
+            Log.i(TAG, "decode start: animation name=$name")
             val frames = JxlDecoder.decodeAnimation(data)
                 ?: throw Exception("Failed to decode JXL animation")
             val elapsed = (System.nanoTime() - startTime) / 1_000_000
             if (frames.isEmpty()) throw Exception("Animation has no frames")
 
+            if (!isCurrentDecode(generation)) return
             _state.value = ImageState(
                 bitmap = frames[0].first,
                 fileName = name,
@@ -202,17 +253,24 @@ class JxlViewModel(application: Application) : AndroidViewModel(application) {
                 currentFrame = 0,
                 isPlaying = false,
             )
+            Log.i(TAG, "decode done: animation frames=${frames.size}, elapsed=${elapsed}ms")
             startAnimation()
         } else {
-            // ALWAYS use progressive decode -- shows intermediate frames as they arrive.
-            // When simulateSlow is true, chunk size & delay come from settings.
-            // When simulateSlow is false, use 2% chunks with 0ms delay (fast, still progressive).
+            // Always progressive for non-animation images.
+            // simulateSlow=false => no artificial delay, larger flush interval (fast progressive)
+            // simulateSlow=true  => user-controlled chunk/delay (demo mode)
             val decodeSettings = if (s.simulateSlow) {
                 s
             } else {
-                s.copy(simulateSlow = true, slowChunkPct = 2.0f, slowDelayMs = 0)
+                s.copy(simulateSlow = false, slowChunkPct = 1.0f, slowDelayMs = 0)
             }
 
+            Log.i(
+                TAG,
+                "decode start: progressive name=$name simulateSlow=${decodeSettings.simulateSlow} chunkPct=${decodeSettings.slowChunkPct} delayMs=${decodeSettings.slowDelayMs}"
+            )
+
+            if (!isCurrentDecode(generation)) return
             _state.value = ImageState(
                 isLoading = false,
                 fileName = name,
@@ -220,30 +278,45 @@ class JxlViewModel(application: Application) : AndroidViewModel(application) {
                 progressPct = 0,
             )
 
+            var lastLoggedPct = -10
             JxlDecoder.decodeProgressive(data, decodeSettings) { pixels, w, h, passes, pct ->
-                val bmp = JxlDecoder.pixelsToBitmapPublic(pixels, w, h) ?: return@decodeProgressive
-                _state.value = _state.value.copy(
-                    bitmap = bmp,
+                if (!isCurrentDecode(generation)) return@decodeProgressive
+                val current = _state.value
+                val bmp = if (pixels.isNotEmpty()) {
+                    JxlDecoder.pixelsToBitmapPublic(pixels, w, h, reusableProgressiveBitmap)
+                } else {
+                    current.bitmap
+                }
+
+                if (bmp != null) {
+                    reusableProgressiveBitmap = bmp
+                }
+
+                _state.value = current.copy(
+                    bitmap = bmp ?: current.bitmap,
                     width = w,
                     height = h,
                     completedPasses = passes,
                     progressPct = pct,
                     isLoading = false,
-                    isProgressive = s.simulateSlow,  // only show overlay in slow mode
+                    isProgressive = pct < 100,
                     fileName = name,
                     fileSizeBytes = data.size.toLong(),
                 )
+
+                if (pct >= lastLoggedPct + 10 || pct == 100) {
+                    Log.i(TAG, "progress: name=$name pct=$pct passes=$passes size=${w}x${h} pixels=${pixels.size}")
+                    lastLoggedPct = pct
+                }
             }
 
             val elapsed = (System.nanoTime() - startTime) / 1_000_000
-            android.util.Log.d("JxlDecode", "Progressive decode finished in ${elapsed}ms for $name")
-            val current = _state.value
-            _state.value = current.copy(
+            _state.value = _state.value.copy(
                 decodeTimeMs = elapsed,
                 isProgressive = false,
                 progressPct = 100,
             )
-            android.util.Log.d("JxlDecode", "State updated: decodeTimeMs=${_state.value.decodeTimeMs}")
+            Log.i(TAG, "decode done: progressive elapsed=${elapsed}ms")
         }
     }
 }

@@ -9,6 +9,7 @@ crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 jxl = { git = "https://github.com/hjanuschka/jxl-rs.git", branch = "main-pr697", features = ["all-simd"] }
+half = "2"
 jni = { version = "0.21", optional = true }
 
 [features]
@@ -16,6 +17,8 @@ default = []
 android = ["jni"]
 
 [profile.release]
-opt-level = "z"
+# Optimize for decode speed on device/emulator (not binary size).
+opt-level = 3
 lto = true
+codegen-units = 1
 strip = true

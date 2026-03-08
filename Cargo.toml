@@ -45,6 +45,14 @@ open = "5"
 [profile.dev]
 opt-level = 2
 
+# Workaround for upstream jxl-rs debug overflow panic in LF preview path
+# (progressive_5.jxl with PR697). Keep checks for our crate, disable in decoder deps.
+[profile.dev.package.jxl]
+overflow-checks = false
+
+[profile.dev.package.jxl_transforms]
+overflow-checks = false
+
 [profile.release]
 opt-level = 3
 lto = true

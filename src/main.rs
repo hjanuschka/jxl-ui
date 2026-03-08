@@ -10,35 +10,30 @@ use std::time::{Duration, Instant};
 
 use decoder::{DecoderSettings, OutputColorType, OutputDataType};
 
-// Refined dark theme - inspired by Linear/Raycast
+// Black matte theme - matching mobile + januschka.com
 mod theme {
     use eframe::egui::Color32;
 
-    // Backgrounds - subtle gray scale
-    pub const BG_BASE: Color32 = Color32::from_rgb(17, 17, 19);
-    pub const BG_ELEVATED: Color32 = Color32::from_rgb(24, 24, 27);
-    pub const BG_SURFACE: Color32 = Color32::from_rgb(32, 32, 36);
-    pub const BG_HOVER: Color32 = Color32::from_rgb(42, 42, 48);
-    pub const BG_ACTIVE: Color32 = Color32::from_rgb(52, 52, 60);
+    pub const BG_BASE: Color32 = Color32::from_rgb(18, 18, 18);      // #121212
+    pub const BG_ELEVATED: Color32 = Color32::from_rgb(24, 24, 24);  // close to #1E1E1E
+    pub const BG_SURFACE: Color32 = Color32::from_rgb(30, 30, 30);   // #1E1E1E
+    pub const BG_HOVER: Color32 = Color32::from_rgb(42, 42, 42);
+    pub const BG_ACTIVE: Color32 = Color32::from_rgb(51, 51, 51);    // #333333
 
-    // Text hierarchy
-    pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(250, 250, 250);
+    pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(190, 190, 190);
     pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(161, 161, 170);
-    pub const TEXT_MUTED: Color32 = Color32::from_rgb(113, 113, 122);
+    pub const TEXT_MUTED: Color32 = Color32::from_rgb(138, 138, 141);
 
-    // Accent - soft blue
-    pub const ACCENT: Color32 = Color32::from_rgb(99, 102, 241);
+    pub const ACCENT: Color32 = Color32::from_rgb(255, 193, 7);      // #FFC107
     #[allow(dead_code)]
-    pub const ACCENT_HOVER: Color32 = Color32::from_rgb(129, 132, 255);
+    pub const ACCENT_HOVER: Color32 = Color32::from_rgb(255, 214, 80);
     #[allow(dead_code)]
-    pub const ACCENT_MUTED: Color32 = Color32::from_rgb(99, 102, 241);
+    pub const ACCENT_MUTED: Color32 = Color32::from_rgb(230, 142, 13);
 
-    // Borders
-    pub const BORDER: Color32 = Color32::from_rgb(39, 39, 42);
-    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(32, 32, 36);
+    pub const BORDER: Color32 = Color32::from_rgb(51, 51, 51);
+    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(42, 42, 42);
 
-    // Semantic
-    pub const ERROR: Color32 = Color32::from_rgb(239, 68, 68);
+    pub const ERROR: Color32 = Color32::from_rgb(211, 95, 95);
     pub const SUCCESS: Color32 = Color32::from_rgb(34, 197, 94);
 }
 
@@ -82,9 +77,18 @@ fn main() -> eframe::Result<()> {
 }
 
 fn setup_fonts(ctx: &egui::Context) {
-    // Use egui's excellent default fonts (Hack for mono, Ubuntu-Light for proportional)
-    // They're already high quality and cross-platform
-    let fonts = egui::FontDefinitions::default();
+    // Prefer monospace typography across the app for terminal-style look.
+    let mut fonts = egui::FontDefinitions::default();
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "Hack".to_owned());
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "Hack".to_owned());
     ctx.set_fonts(fonts);
 }
 
@@ -778,18 +782,6 @@ impl eframe::App for JxlApp {
                 // Toggle nearest/linear filtering (N key)
                 if ui.input(|i| i.key_pressed(egui::Key::N) && !i.modifiers.command) {
                     self.nearest_filter = !self.nearest_filter;
-                    // Re-upload all textures with new filter mode
-                    let tex_opts = if self.nearest_filter {
-                        egui::TextureOptions::NEAREST
-                    } else {
-                        egui::TextureOptions::LINEAR
-                    };
-                    for tab in &mut self.tabs {
-                        if let Some(texture) = &tab.texture {
-                            // Force re-upload by clearing and re-processing
-                            // The next process_messages or reload will use the new options
-                        }
-                    }
                     // Reload to apply new filter
                     let settings = self.decoder_settings.clone();
                     let compare = self.compare_mode;
@@ -917,7 +909,8 @@ impl eframe::App for JxlApp {
                                     egui::Button::new(
                                         RichText::new("Open File")
                                             .size(14.0)
-                                            .color(theme::TEXT_PRIMARY)
+                                            .strong()
+                                            .color(theme::BG_BASE)
                                     )
                                     .fill(theme::ACCENT)
                                     .rounding(Rounding::same(8.0))
@@ -1460,7 +1453,8 @@ impl eframe::App for JxlApp {
                         egui::Button::new(
                             RichText::new("⟳ Reload with Settings")
                                 .size(13.0)
-                                .color(theme::TEXT_PRIMARY)
+                                .strong()
+                                .color(theme::BG_BASE)
                         )
                         .fill(theme::ACCENT)
                         .rounding(Rounding::same(6.0))
@@ -1543,17 +1537,22 @@ fn show_image_zoomed(
 fn decode_file(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSettings) {
     log::info!("Decoding with settings: {:?}", settings);
     let tx_clone = tx.clone();
-    match decoder::worker::decode_jxl_progressive(&path, &settings, move |update| {
-        let _ = tx_clone.send(DecoderMessage::ProgressiveUpdate {
-            rgba: update.rgba_data,
-            width: update.width,
-            height: update.height,
-            completed_passes: update.completed_passes,
-            is_final: update.is_final,
-            elapsed: update.elapsed,
-        });
-    }) {
-        Ok(result) => {
+
+    let decode_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decoder::worker::decode_jxl_progressive(&path, &settings, move |update| {
+            let _ = tx_clone.send(DecoderMessage::ProgressiveUpdate {
+                rgba: update.rgba_data,
+                width: update.width,
+                height: update.height,
+                completed_passes: update.completed_passes,
+                is_final: update.is_final,
+                elapsed: update.elapsed,
+            });
+        })
+    }));
+
+    match decode_result {
+        Ok(Ok(result)) => {
             match result {
                 decoder::DecodeResult::SingleFrame { frame, .. } => {
                     let _ = tx.send(DecoderMessage::ProgressiveUpdate {
@@ -1581,8 +1580,13 @@ fn decode_file(path: PathBuf, tx: Sender<DecoderMessage>, settings: DecoderSetti
             }
             let _ = tx.send(DecoderMessage::Complete);
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             let _ = tx.send(DecoderMessage::Error(e.to_string()));
+        }
+        Err(_) => {
+            let _ = tx.send(DecoderMessage::Error(
+                "Decoder panic (likely jxl-rs LF preview debug overflow). Try release build.".to_string(),
+            ));
         }
     }
 }
@@ -1595,10 +1599,14 @@ fn decode_file_standard(path: PathBuf, tx: Sender<DecoderMessage>, settings: Dec
     log::info!("Standard decode (compare mode): {:?}", settings);
     // Use the same progressive decoder internally, but ignore all intermediate callbacks.
     // The slow_delay still applies so timing is comparable.
-    match decoder::worker::decode_jxl_progressive(&path, &settings, |_update| {
-        // No-op: don't send intermediate updates
-    }) {
-        Ok(result) => {
+    let decode_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decoder::worker::decode_jxl_progressive(&path, &settings, |_update| {
+            // No-op: don't send intermediate updates
+        })
+    }));
+
+    match decode_result {
+        Ok(Ok(result)) => {
             match result {
                 decoder::DecodeResult::SingleFrame { frame, .. } => {
                     let _ = tx.send(DecoderMessage::ProgressiveUpdate {
@@ -1614,8 +1622,13 @@ fn decode_file_standard(path: PathBuf, tx: Sender<DecoderMessage>, settings: Dec
             }
             let _ = tx.send(DecoderMessage::Complete);
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             let _ = tx.send(DecoderMessage::Error(e.to_string()));
+        }
+        Err(_) => {
+            let _ = tx.send(DecoderMessage::Error(
+                "Decoder panic (likely jxl-rs LF preview debug overflow). Try release build.".to_string(),
+            ));
         }
     }
 }

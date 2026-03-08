@@ -1,8 +1,10 @@
 package com.jxlui
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -33,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -61,9 +64,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        intent?.data?.let { uri ->
-            viewModel.loadFromUri(uri, getFileName(uri))
-        }
+        handleIntent(intent)
 
         setContent {
             MaterialTheme(
@@ -75,6 +76,58 @@ class MainActivity : ComponentActivity() {
             ) {
                 JxlViewerScreen(viewModel)
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent == null) return
+
+        // Optional debug overrides from intent extras
+        var debugSettings = viewModel.settings.value
+        var settingsChanged = false
+        if (intent.hasExtra("simulate_slow")) {
+            debugSettings = debugSettings.copy(simulateSlow = intent.getBooleanExtra("simulate_slow", debugSettings.simulateSlow))
+            settingsChanged = true
+        }
+        if (intent.hasExtra("slow_chunk_pct")) {
+            debugSettings = debugSettings.copy(slowChunkPct = intent.getFloatExtra("slow_chunk_pct", debugSettings.slowChunkPct))
+            settingsChanged = true
+        }
+        if (intent.hasExtra("slow_delay_ms")) {
+            debugSettings = debugSettings.copy(slowDelayMs = intent.getLongExtra("slow_delay_ms", debugSettings.slowDelayMs))
+            settingsChanged = true
+        }
+        if (intent.hasExtra("data_type")) {
+            debugSettings = debugSettings.copy(dataType = intent.getIntExtra("data_type", debugSettings.dataType))
+            settingsChanged = true
+        }
+        if (intent.hasExtra("color_type")) {
+            debugSettings = debugSettings.copy(colorType = intent.getIntExtra("color_type", debugSettings.colorType))
+            settingsChanged = true
+        }
+        if (settingsChanged) {
+            viewModel.settings.value = debugSettings
+            Log.i("JxlIntent", "Applied debug settings: $debugSettings")
+        }
+
+        // Debug helper: adb shell am start -n com.jxlui/.MainActivity --es sample_name progressive_5.jxl
+        val sampleName = intent.getStringExtra("sample_name")
+        if (!sampleName.isNullOrBlank()) {
+            Log.i("JxlIntent", "Loading bundled sample via intent: $sampleName")
+            viewModel.loadSample(sampleName)
+            return
+        }
+
+        intent.data?.let { uri ->
+            val name = getFileName(uri)
+            Log.i("JxlIntent", "Loading URI via intent: $uri (name=$name)")
+            viewModel.loadFromUri(uri, name)
         }
     }
 
@@ -145,6 +198,7 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
                     bitmap = state.bitmap!!.asImageBitmap(),
                     contentDescription = state.fileName,
                     contentScale = ContentScale.Fit,
+                    filterQuality = FilterQuality.None,
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
@@ -255,6 +309,21 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
                     .clickable { showSettings = !showSettings },
                 contentAlignment = Alignment.Center,
             ) { Text("\u2699", color = if (showSettings) Accent else TextDim, fontSize = 14.sp) }
+
+            if (state.bitmap != null) {
+                Spacer(Modifier.width(8.dp))
+
+                // Reload / rerender
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .border(1.dp, Border, RoundedCornerShape(6.dp))
+                        .background(Bg)
+                        .clickable { viewModel.reload() },
+                    contentAlignment = Alignment.Center,
+                ) { Text("R", color = TextDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
+            }
 
             Spacer(Modifier.width(8.dp))
 
@@ -636,20 +705,22 @@ fun SampleGallery(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(72.dp)
                     .border(1.dp, Border, RoundedCornerShape(8.dp))
                     .background(
                         Brush.linearGradient(listOf(BgLight, BgLighter.copy(alpha = 0.3f))),
                         RoundedCornerShape(8.dp),
                     )
                     .clickable { onSelect(name) }
-                    .padding(14.dp),
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.CenterStart,
             ) {
                 Text(
                     name.removeSuffix(".jxl"),
                     color = Text_,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
