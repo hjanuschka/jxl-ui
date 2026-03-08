@@ -691,7 +691,7 @@ impl eframe::App for JxlApp {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                         if tab.dimensions.is_some() {
                             tab.zoom_fit = false;
-                            tab.zoom = 1.0; // 1:1 pixel mapping
+                            tab.zoom = 1.0;
                             tab.pan = Vec2::ZERO;
                         }
                     }
@@ -703,25 +703,54 @@ impl eframe::App for JxlApp {
                         tab.pan = Vec2::ZERO;
                     }
                 }
+                // Keyboard zoom (+/-)
                 if ui.input(|i| i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)) {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                        tab.zoom *= 1.25;
-                        if tab.zoom_fit && tab.zoom > 1.01 {
-                            tab.zoom_fit = true; // keep fitting but zoomed
-                        }
+                        let old_zoom = tab.zoom;
+                        tab.zoom = (tab.zoom * 1.25).min(50.0);
+                        // Scale pan to keep center stable
+                        tab.pan = tab.pan * (tab.zoom / old_zoom);
                     }
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::Minus)) {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        let old_zoom = tab.zoom;
                         tab.zoom = (tab.zoom / 1.25).max(0.1);
+                        tab.pan = tab.pan * (tab.zoom / old_zoom);
+                        // Reset pan when zoomed out to ~1.0
+                        if tab.zoom_fit && tab.zoom < 1.05 {
+                            tab.zoom = 1.0;
+                            tab.pan = Vec2::ZERO;
+                        }
                     }
                 }
-                // Mouse wheel zoom
-                let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+                // Mouse wheel zoom -- zoom toward cursor position
+                let content_rect = ui.available_rect_before_wrap();
+                let (scroll_delta, pointer_pos) = ui.input(|i| {
+                    (i.smooth_scroll_delta.y, i.pointer.hover_pos())
+                });
                 if scroll_delta != 0.0 {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        let old_zoom = tab.zoom;
                         let factor = if scroll_delta > 0.0 { 1.1 } else { 1.0 / 1.1 };
-                        tab.zoom = (tab.zoom * factor).max(0.1);
+                        tab.zoom = (tab.zoom * factor).clamp(0.1, 50.0);
+
+                        // Zoom toward cursor: adjust pan so the point under the
+                        // cursor stays fixed
+                        if let Some(mouse) = pointer_pos {
+                            let center = content_rect.center();
+                            // Vector from image center (with pan) to cursor
+                            let cursor_offset = mouse - (center + tab.pan);
+                            // Scale the pan so cursor point stays put
+                            let zoom_ratio = tab.zoom / old_zoom;
+                            tab.pan = tab.pan - cursor_offset * (zoom_ratio - 1.0);
+                        }
+
+                        // Reset when zooming back to fit
+                        if tab.zoom_fit && tab.zoom < 1.05 {
+                            tab.zoom = 1.0;
+                            tab.pan = Vec2::ZERO;
+                        }
                     }
                 }
                 // Mouse drag to pan
@@ -730,9 +759,7 @@ impl eframe::App for JxlApp {
                 });
                 if primary_down && drag_delta.length() > 0.0 {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                        if !tab.zoom_fit || tab.zoom > 1.01 {
-                            tab.pan += drag_delta;
-                        }
+                        tab.pan += drag_delta;
                     }
                 }
 
