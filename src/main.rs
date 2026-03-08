@@ -257,7 +257,7 @@ impl ImageTab {
         }
     }
 
-    fn process_messages(&mut self, ctx: &egui::Context) {
+    fn process_messages(&mut self, ctx: &egui::Context, tex_options: egui::TextureOptions) {
         if let Some(rx) = &self.decoder_rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
@@ -269,7 +269,7 @@ impl ImageTab {
                         self.texture = Some(ctx.load_texture(
                             format!("tab-{}-pass-{}", self.id, completed_passes),
                             image,
-                            egui::TextureOptions::LINEAR,
+                            tex_options,
                         ));
                         self.dimensions = Some((width, height));
                         if is_final {
@@ -285,7 +285,7 @@ impl ImageTab {
                         let texture = ctx.load_texture(
                             format!("tab-{}-frame-{}", self.id, frame_index),
                             image,
-                            egui::TextureOptions::LINEAR,
+                            tex_options,
                         );
 
                         if self.animation.is_none() {
@@ -327,7 +327,7 @@ impl ImageTab {
                         self.reference_texture = Some(ctx.load_texture(
                             format!("tab-{}-ref", self.id),
                             image,
-                            egui::TextureOptions::LINEAR,
+                            tex_options,
                         ));
                         if is_final {
                             self.reference_decode_time = Some(elapsed);
@@ -370,6 +370,7 @@ struct JxlApp {
     show_settings: bool,
     decoder_settings: DecoderSettings,
     compare_mode: bool,
+    nearest_filter: bool, // false = linear (smooth), true = nearest (sharp pixels)
 }
 
 impl JxlApp {
@@ -383,6 +384,7 @@ impl JxlApp {
             show_settings: false,
             decoder_settings: DecoderSettings::default(),
             compare_mode: false,
+            nearest_filter: false,
         };
 
         if let Some(path) = initial_file {
@@ -426,8 +428,13 @@ impl JxlApp {
 impl eframe::App for JxlApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Process messages
+        let tex_options = if self.nearest_filter {
+            egui::TextureOptions::NEAREST
+        } else {
+            egui::TextureOptions::LINEAR
+        };
         for tab in &mut self.tabs {
-            tab.process_messages(ctx);
+            tab.process_messages(ctx, tex_options);
             tab.update_animation(ctx);
         }
 
@@ -765,6 +772,31 @@ impl eframe::App for JxlApp {
                 if primary_down && drag_delta.length() > 0.0 {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                         tab.pan += drag_delta;
+                    }
+                }
+
+                // Toggle nearest/linear filtering (N key)
+                if ui.input(|i| i.key_pressed(egui::Key::N) && !i.modifiers.command) {
+                    self.nearest_filter = !self.nearest_filter;
+                    // Re-upload all textures with new filter mode
+                    let tex_opts = if self.nearest_filter {
+                        egui::TextureOptions::NEAREST
+                    } else {
+                        egui::TextureOptions::LINEAR
+                    };
+                    for tab in &mut self.tabs {
+                        if let Some(texture) = &tab.texture {
+                            // Force re-upload by clearing and re-processing
+                            // The next process_messages or reload will use the new options
+                        }
+                    }
+                    // Reload to apply new filter
+                    let settings = self.decoder_settings.clone();
+                    let compare = self.compare_mode;
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        if let Some(path) = tab.file_path.clone() {
+                            tab.load_file(path, settings, compare);
+                        }
                     }
                 }
 
@@ -1319,6 +1351,23 @@ impl eframe::App for JxlApp {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.decoder_settings.high_precision, "");
                         ui.label(RichText::new("High Precision")
+                            .size(12.0)
+                            .color(theme::TEXT_SECONDARY));
+                    });
+
+                    ui.add_space(16.0);
+
+                    // Display
+                    ui.label(RichText::new("DISPLAY")
+                        .size(10.0)
+                        .color(theme::TEXT_MUTED));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut self.nearest_filter, "").changed() {
+                            // Reload to apply new filter mode
+                            should_reload = true;
+                        }
+                        ui.label(RichText::new("Nearest Neighbor (sharp pixels)")
                             .size(12.0)
                             .color(theme::TEXT_SECONDARY));
                     });
