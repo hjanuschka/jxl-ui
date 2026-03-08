@@ -8,37 +8,94 @@ object JxlDecoder {
         System.loadLibrary("jxl_mobile_core")
     }
 
-    /** Decode raw JXL bytes to a DecodedImage (called via JNI). */
     private external fun nativeDecode(data: ByteArray): DecodedImage?
-
-    /** Check if data is an animation. */
+    private external fun nativeDecodeWithSettings(
+        data: ByteArray,
+        colorType: Int,
+        dataType: Int,
+        premultiplyAlpha: Byte,
+        linearOutput: Byte,
+        highPrecision: Byte,
+    ): DecodedImage?
     private external fun nativeIsAnimation(data: ByteArray): Byte
-
-    /** Decode animation frames. Returns ArrayList<AnimFrame>. */
     private external fun nativeDecodeAnimation(data: ByteArray): ArrayList<AnimFrame>?
+    private external fun nativeDecodeProgressive(
+        data: ByteArray,
+        colorType: Int,
+        dataType: Int,
+        premultiplyAlpha: Byte,
+        linearOutput: Byte,
+        highPrecision: Byte,
+        slowChunkPct: Float,
+        slowDelayMs: Long,
+        listener: ProgressListener,
+    ): DecodedImage?
 
-    /** Decode JXL bytes into an Android Bitmap. Returns null on error. */
+    /** Callback interface for progressive decode updates. */
+    interface ProgressListener {
+        fun onProgress(pixels: ByteArray, width: Int, height: Int, passes: Int, progressPct: Int)
+    }
+
     fun decode(data: ByteArray): Bitmap? {
         val decoded = nativeDecode(data) ?: return null
         return pixelsToBitmap(decoded.pixels, decoded.width, decoded.height)
     }
 
-    /** Check if JXL data contains an animation. */
+    fun decodeWithSettings(data: ByteArray, settings: DecoderSettings): Bitmap? {
+        val decoded = nativeDecodeWithSettings(
+            data,
+            settings.colorType,
+            settings.dataType,
+            if (settings.premultiplyAlpha) 1 else 0,
+            if (settings.linearOutput) 1 else 0,
+            if (settings.highPrecision) 1 else 0,
+        ) ?: return null
+        return pixelsToBitmap(decoded.pixels, decoded.width, decoded.height)
+    }
+
     fun isAnimation(data: ByteArray): Boolean {
         return nativeIsAnimation(data) != 0.toByte()
     }
 
-    /** Decode animation. Returns list of (Bitmap, durationMs) pairs, or null. */
     fun decodeAnimation(data: ByteArray): List<Pair<Bitmap, Int>>? {
         val frames = nativeDecodeAnimation(data) ?: return null
         return frames.map { frame ->
-            val bmp = pixelsToBitmap(frame.pixels, frame.width, frame.height)
-                ?: return null
+            val bmp = pixelsToBitmap(frame.pixels, frame.width, frame.height) ?: return null
             Pair(bmp, frame.durationMs)
         }
     }
 
-    /** Convert RGBA8 byte array to Android Bitmap. */
+    /**
+     * Progressive decode with callback for each partial update.
+     */
+    fun decodeProgressive(
+        data: ByteArray,
+        settings: DecoderSettings,
+        onProgress: (pixels: ByteArray, width: Int, height: Int, passes: Int, pct: Int) -> Unit,
+    ): Bitmap? {
+        val decoded = nativeDecodeProgressive(
+            data,
+            settings.colorType,
+            settings.dataType,
+            if (settings.premultiplyAlpha) 1 else 0,
+            if (settings.linearOutput) 1 else 0,
+            if (settings.highPrecision) 1 else 0,
+            settings.slowChunkPct,
+            settings.slowDelayMs,
+            object : ProgressListener {
+                override fun onProgress(pixels: ByteArray, width: Int, height: Int, passes: Int, progressPct: Int) {
+                    onProgress(pixels, width, height, passes, progressPct)
+                }
+            },
+        ) ?: return null
+        return pixelsToBitmap(decoded.pixels, decoded.width, decoded.height)
+    }
+
+    /** Public version for ViewModel use. */
+    fun pixelsToBitmapPublic(pixels: ByteArray, width: Int, height: Int): Bitmap? {
+        return pixelsToBitmap(pixels, width, height)
+    }
+
     private fun pixelsToBitmap(pixels: ByteArray, width: Int, height: Int): Bitmap? {
         if (pixels.size < width * height * 4) return null
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)

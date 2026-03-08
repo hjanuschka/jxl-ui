@@ -40,6 +40,37 @@ pub struct DecodedAnimation {
     pub loop_count: u32,
 }
 
+/// Decoder settings matching desktop jxl-ui
+#[derive(Clone, Debug)]
+pub struct MobileSettings {
+    /// 0=Auto, 1=Rgb, 2=Rgba, 3=Bgr, 4=Bgra, 5=Grayscale, 6=GrayscaleAlpha
+    pub color_type: u8,
+    /// 0=F32, 1=U8, 2=U16, 3=F16
+    pub data_type: u8,
+    pub premultiply_alpha: bool,
+    pub linear_output: bool,
+    pub high_precision: bool,
+    // Progressive
+    pub simulate_slow: bool,
+    pub slow_chunk_pct: f32,
+    pub slow_delay_ms: u64,
+}
+
+impl Default for MobileSettings {
+    fn default() -> Self {
+        Self {
+            color_type: 0,  // Auto
+            data_type: 0,   // F32
+            premultiply_alpha: true,
+            linear_output: false,
+            high_precision: false,
+            simulate_slow: false,
+            slow_chunk_pct: 1.0,
+            slow_delay_ms: 50,
+        }
+    }
+}
+
 /// Progressive update callback data
 pub struct ProgressiveUpdate {
     pub pixels: Vec<u8>, // RGBA8
@@ -65,19 +96,40 @@ fn setup_pixel_format(
     extra_channels: &[jxl::api::JxlExtraChannel],
     native_color_type: JxlColorType,
 ) -> PixelSetup {
+    setup_pixel_format_with_settings(decoder_with_info, extra_channels, native_color_type, &MobileSettings::default())
+}
+
+fn setup_pixel_format_with_settings(
+    decoder_with_info: &mut jxl::api::JxlDecoder<jxl::api::states::WithImageInfo>,
+    extra_channels: &[jxl::api::JxlExtraChannel],
+    native_color_type: JxlColorType,
+    settings: &MobileSettings,
+) -> PixelSetup {
     let has_alpha = extra_channels
         .iter()
         .any(|ec| ec.ec_type == ExtraChannel::Alpha);
 
-    let target_color_type = if has_alpha {
-        match native_color_type {
-            JxlColorType::Rgb => JxlColorType::Rgba,
-            JxlColorType::Bgr => JxlColorType::Bgra,
-            JxlColorType::Grayscale => JxlColorType::GrayscaleAlpha,
-            other => other,
+    // Map settings color_type to JxlColorType
+    let target_color_type = match settings.color_type {
+        1 => JxlColorType::Rgb,
+        2 => JxlColorType::Rgba,
+        3 => JxlColorType::Bgr,
+        4 => JxlColorType::Bgra,
+        5 => JxlColorType::Grayscale,
+        6 => JxlColorType::GrayscaleAlpha,
+        _ => {
+            // Auto: use native but upgrade to include alpha if present
+            if has_alpha {
+                match native_color_type {
+                    JxlColorType::Rgb => JxlColorType::Rgba,
+                    JxlColorType::Bgr => JxlColorType::Bgra,
+                    JxlColorType::Grayscale => JxlColorType::GrayscaleAlpha,
+                    other => other,
+                }
+            } else {
+                native_color_type
+            }
         }
-    } else {
-        native_color_type
     };
 
     let alpha_folded = has_alpha
@@ -198,12 +250,17 @@ fn f32_buffer_to_rgba8(
 // ---------------------------------------------------------------------------
 
 pub fn decode_jxl_to_rgba(data: &[u8]) -> Result<DecodedImage, String> {
+    decode_jxl_with_settings(data, &MobileSettings::default())
+}
+
+pub fn decode_jxl_with_settings(data: &[u8], settings: &MobileSettings) -> Result<DecodedImage, String> {
     let mut reader = BufReader::new(std::io::Cursor::new(data));
 
     let mut options = JxlDecoderOptions::default();
     options.adjust_orientation = true;
     options.coalescing = true;
-    options.premultiply_output = true;
+    options.premultiply_output = settings.premultiply_alpha;
+    options.high_precision = settings.high_precision;
 
     let decoder = JxlDecoder::new(options);
 
@@ -220,7 +277,7 @@ pub fn decode_jxl_to_rgba(data: &[u8]) -> Result<DecodedImage, String> {
     let extra_channels = basic_info.extra_channels.clone();
     let native_color_type = decoder_with_info.current_pixel_format().color_type;
 
-    let setup = setup_pixel_format(&mut decoder_with_info, &extra_channels, native_color_type);
+    let setup = setup_pixel_format_with_settings(&mut decoder_with_info, &extra_channels, native_color_type, settings);
     let samples_per_pixel = setup.color_type.samples_per_pixel();
 
     let (mut main_buffer, mut extra_bufs) =
@@ -391,8 +448,7 @@ pub fn is_jxl_animation(data: &[u8]) -> bool {
 
 pub fn decode_jxl_progressive<F>(
     data: &[u8],
-    slow_chunk_pct: f32,
-    slow_delay_ms: u64,
+    settings: &MobileSettings,
     mut on_progress: F,
 ) -> Result<DecodedImage, String>
 where
@@ -402,13 +458,13 @@ where
     use std::time::Duration;
 
     let file_size = data.len();
-    let chunk_size = if slow_chunk_pct > 0.0 {
-        ((file_size as f32 * slow_chunk_pct / 100.0) as usize).max(1024)
+    let chunk_size = if settings.slow_chunk_pct > 0.0 {
+        ((file_size as f32 * settings.slow_chunk_pct / 100.0) as usize).max(1024)
     } else {
         16 * 1024
     };
-    let slow_delay = if slow_delay_ms > 0 {
-        Some(Duration::from_millis(slow_delay_ms))
+    let slow_delay = if settings.slow_delay_ms > 0 && settings.simulate_slow {
+        Some(Duration::from_millis(settings.slow_delay_ms))
     } else {
         None
     };
@@ -419,7 +475,8 @@ where
     let mut options = JxlDecoderOptions::default();
     options.adjust_orientation = true;
     options.coalescing = true;
-    options.premultiply_output = true;
+    options.premultiply_output = settings.premultiply_alpha;
+    options.high_precision = settings.high_precision;
 
     let mut decoder = JxlDecoder::new(options);
 
@@ -457,7 +514,7 @@ where
         return decode_jxl_to_rgba(data);
     }
 
-    let setup = setup_pixel_format(&mut decoder_with_info, &extra_channels, native_color_type);
+    let setup = setup_pixel_format_with_settings(&mut decoder_with_info, &extra_channels, native_color_type, settings);
     let color_type = setup.color_type;
     let samples_per_pixel = color_type.samples_per_pixel();
 
@@ -801,6 +858,42 @@ mod android {
         create_decoded_image_object(&mut env, &decoded)
     }
 
+    /// Decode with full settings (color_type, data_type, premultiply, linear, high_precision)
+    #[no_mangle]
+    pub extern "system" fn Java_com_jxlui_JxlDecoder_nativeDecodeWithSettings<'a>(
+        mut env: JNIEnv<'a>,
+        _class: JClass<'a>,
+        data: JByteArray<'a>,
+        color_type: i32,
+        data_type: i32,
+        premultiply_alpha: u8,
+        linear_output: u8,
+        high_precision: u8,
+    ) -> jobject {
+        let bytes = match env.convert_byte_array(&data) {
+            Ok(b) => b,
+            Err(_) => return JObject::null().into_raw(),
+        };
+
+        let settings = MobileSettings {
+            color_type: color_type as u8,
+            data_type: data_type as u8,
+            premultiply_alpha: premultiply_alpha != 0,
+            linear_output: linear_output != 0,
+            high_precision: high_precision != 0,
+            simulate_slow: false,
+            slow_chunk_pct: 1.0,
+            slow_delay_ms: 50,
+        };
+
+        let decoded = match decode_jxl_with_settings(&bytes, &settings) {
+            Ok(img) => img,
+            Err(_) => return JObject::null().into_raw(),
+        };
+
+        create_decoded_image_object(&mut env, &decoded)
+    }
+
     /// Check if data is animation
     #[no_mangle]
     pub extern "system" fn Java_com_jxlui_JxlDecoder_nativeIsAnimation<'a>(
@@ -873,12 +966,17 @@ mod android {
         list.into_raw()
     }
 
-    /// Progressive decode with callback
+    /// Progressive decode with callback (full settings)
     #[no_mangle]
     pub extern "system" fn Java_com_jxlui_JxlDecoder_nativeDecodeProgressive<'a>(
         mut env: JNIEnv<'a>,
         _class: JClass<'a>,
         data: JByteArray<'a>,
+        color_type: i32,
+        data_type: i32,
+        premultiply_alpha: u8,
+        linear_output: u8,
+        high_precision: u8,
         slow_chunk_pct: f32,
         slow_delay_ms: i64,
         listener: JObject<'a>,
@@ -886,6 +984,17 @@ mod android {
         let bytes = match env.convert_byte_array(&data) {
             Ok(b) => b,
             Err(_) => return JObject::null().into_raw(),
+        };
+
+        let settings = MobileSettings {
+            color_type: color_type as u8,
+            data_type: data_type as u8,
+            premultiply_alpha: premultiply_alpha != 0,
+            linear_output: linear_output != 0,
+            high_precision: high_precision != 0,
+            simulate_slow: true,
+            slow_chunk_pct,
+            slow_delay_ms: slow_delay_ms as u64,
         };
 
         let listener_global = match env.new_global_ref(&listener) {
@@ -900,8 +1009,7 @@ mod android {
 
         let decoded = decode_jxl_progressive(
             &bytes,
-            slow_chunk_pct,
-            slow_delay_ms as u64,
+            &settings,
             |update| {
                 if let Ok(mut cb_env) = jvm.attach_current_thread() {
                     if let Ok(pixel_array) = cb_env.byte_array_from_slice(&update.pixels) {
