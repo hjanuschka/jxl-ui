@@ -1,6 +1,7 @@
 package com.jxlui
 
 import android.graphics.Bitmap
+import java.util.ArrayList
 
 object JxlDecoder {
     init {
@@ -10,24 +11,47 @@ object JxlDecoder {
     /** Decode raw JXL bytes to a DecodedImage (called via JNI). */
     private external fun nativeDecode(data: ByteArray): DecodedImage?
 
-    /** Decode JXL bytes into an Android Bitmap. */
+    /** Check if data is an animation. */
+    private external fun nativeIsAnimation(data: ByteArray): Byte
+
+    /** Decode animation frames. Returns ArrayList<AnimFrame>. */
+    private external fun nativeDecodeAnimation(data: ByteArray): ArrayList<AnimFrame>?
+
+    /** Decode JXL bytes into an Android Bitmap. Returns null on error. */
     fun decode(data: ByteArray): Bitmap? {
         val decoded = nativeDecode(data) ?: return null
+        return pixelsToBitmap(decoded.pixels, decoded.width, decoded.height)
+    }
 
-        val bitmap = Bitmap.createBitmap(decoded.width, decoded.height, Bitmap.Config.ARGB_8888)
+    /** Check if JXL data contains an animation. */
+    fun isAnimation(data: ByteArray): Boolean {
+        return nativeIsAnimation(data) != 0.toByte()
+    }
 
-        // Convert RGBA to ARGB (Android's native format) via IntArray
-        val pixels = IntArray(decoded.width * decoded.height)
-        for (i in pixels.indices) {
-            val offset = i * 4
-            val r = decoded.pixels[offset].toInt() and 0xFF
-            val g = decoded.pixels[offset + 1].toInt() and 0xFF
-            val b = decoded.pixels[offset + 2].toInt() and 0xFF
-            val a = decoded.pixels[offset + 3].toInt() and 0xFF
-            pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+    /** Decode animation. Returns list of (Bitmap, durationMs) pairs, or null. */
+    fun decodeAnimation(data: ByteArray): List<Pair<Bitmap, Int>>? {
+        val frames = nativeDecodeAnimation(data) ?: return null
+        return frames.map { frame ->
+            val bmp = pixelsToBitmap(frame.pixels, frame.width, frame.height)
+                ?: return null
+            Pair(bmp, frame.durationMs)
         }
-        bitmap.setPixels(pixels, 0, decoded.width, 0, 0, decoded.width, decoded.height)
+    }
 
+    /** Convert RGBA8 byte array to Android Bitmap. */
+    private fun pixelsToBitmap(pixels: ByteArray, width: Int, height: Int): Bitmap? {
+        if (pixels.size < width * height * 4) return null
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val intPixels = IntArray(width * height)
+        for (i in intPixels.indices) {
+            val offset = i * 4
+            val r = pixels[offset].toInt() and 0xFF
+            val g = pixels[offset + 1].toInt() and 0xFF
+            val b = pixels[offset + 2].toInt() and 0xFF
+            val a = pixels[offset + 3].toInt() and 0xFF
+            intPixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+        }
+        bitmap.setPixels(intPixels, 0, width, 0, 0, width, height)
         return bitmap
     }
 }

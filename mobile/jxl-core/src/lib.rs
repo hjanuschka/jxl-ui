@@ -1,6 +1,8 @@
 //! JXL Mobile Core - Shared FFI library for decoding JPEG XL images.
 //!
 //! Provides both C FFI (for iOS/Swift) and JNI (for Android/Kotlin).
+//! Supports progressive decoding with flush_pixels() for streaming display.
+//! Supports animation decoding (multi-frame JXL).
 
 use jxl::api::{
     JxlColorType, JxlDecoder, JxlDecoderOptions, JxlOutputBuffer, JxlPixelFormat,
@@ -9,43 +11,60 @@ use jxl::api::{
 use jxl::headers::extra_channels::ExtraChannel;
 use jxl::image::{Image, Rect};
 use std::io::BufReader;
+use std::panic;
 
 // ---------------------------------------------------------------------------
-// Core decode logic
+// Core types
 // ---------------------------------------------------------------------------
 
-/// Decoded image result
+/// Decoded image result (single frame)
 pub struct DecodedImage {
     pub pixels: Vec<u8>, // RGBA8
     pub width: u32,
     pub height: u32,
 }
 
-/// Decode JXL bytes into RGBA8 pixels.
-pub fn decode_jxl_to_rgba(data: &[u8]) -> Result<DecodedImage, String> {
-    let mut reader = BufReader::new(std::io::Cursor::new(data));
+/// A single animation frame
+pub struct AnimationFrame {
+    pub pixels: Vec<u8>, // RGBA8
+    pub width: u32,
+    pub height: u32,
+    pub duration_ms: u32,
+}
 
-    let mut options = JxlDecoderOptions::default();
-    options.adjust_orientation = true;
-    options.coalescing = true;
-    options.premultiply_output = true;
+/// Decoded animation result
+pub struct DecodedAnimation {
+    pub frames: Vec<AnimationFrame>,
+    pub width: u32,
+    pub height: u32,
+    pub loop_count: u32,
+}
 
-    let decoder = JxlDecoder::new(options);
+/// Progressive update callback data
+pub struct ProgressiveUpdate {
+    pub pixels: Vec<u8>, // RGBA8
+    pub width: u32,
+    pub height: u32,
+    pub completed_passes: usize,
+    pub progress_pct: usize,
+    pub is_final: bool,
+}
 
-    let mut decoder_with_info = match decoder.process(&mut reader) {
-        Ok(ProcessingResult::Complete { result }) => result,
-        Ok(ProcessingResult::NeedsMoreInput { .. }) => {
-            return Err("Incomplete header data".to_string());
-        }
-        Err(e) => return Err(format!("Header decode error: {e}")),
-    };
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
-    let basic_info = decoder_with_info.basic_info();
-    let (width, height) = basic_info.size;
-    let extra_channels = basic_info.extra_channels.clone();
-    let native_color_type = decoder_with_info.current_pixel_format().color_type;
+/// Setup decoder pixel format with alpha auto-detection
+struct PixelSetup {
+    color_type: JxlColorType,
+    extra_buf_count: usize,
+}
 
-    // Auto-detect alpha and upgrade color type
+fn setup_pixel_format(
+    decoder_with_info: &mut jxl::api::JxlDecoder<jxl::api::states::WithImageInfo>,
+    extra_channels: &[jxl::api::JxlExtraChannel],
+    native_color_type: JxlColorType,
+) -> PixelSetup {
     let has_alpha = extra_channels
         .iter()
         .any(|ec| ec.ec_type == ExtraChannel::Alpha);
@@ -93,57 +112,36 @@ pub fn decode_jxl_to_rgba(data: &[u8]) -> Result<DecodedImage, String> {
         extra_channel_format,
     });
 
-    let pixel_format = decoder_with_info.current_pixel_format();
-    let color_type = pixel_format.color_type;
-    let samples_per_pixel = color_type.samples_per_pixel();
+    PixelSetup {
+        color_type: target_color_type,
+        extra_buf_count,
+    }
+}
 
-    // Allocate buffers
-    let mut main_buffer =
+/// Allocate main + extra buffers for a frame
+fn alloc_buffers(
+    width: usize,
+    height: usize,
+    samples_per_pixel: usize,
+    extra_buf_count: usize,
+) -> Result<(Image<f32>, Vec<Image<f32>>), String> {
+    let main_buffer =
         Image::<f32>::new((width * samples_per_pixel, height)).map_err(|e| e.to_string())?;
-    let mut extra_bufs: Vec<Image<f32>> = (0..extra_buf_count)
+    let extra_bufs: Vec<Image<f32>> = (0..extra_buf_count)
         .map(|_| Image::<f32>::new((width, height)))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
+    Ok((main_buffer, extra_bufs))
+}
 
-    let rect = Rect {
-        size: main_buffer.size(),
-        origin: (0, 0),
-    };
-
-    // Get frame info
-    let mut decoder_with_frame = match decoder_with_info.process(&mut reader) {
-        Ok(ProcessingResult::Complete { result }) => result,
-        Ok(ProcessingResult::NeedsMoreInput { .. }) => {
-            return Err("Incomplete frame header".to_string());
-        }
-        Err(e) => return Err(format!("Frame header error: {e}")),
-    };
-
-    // Decode frame
-    loop {
-        let mut output_bufs = vec![JxlOutputBuffer::from_image_rect_mut(
-            main_buffer.get_rect_mut(rect).into_raw(),
-        )];
-        for extra in &mut extra_bufs {
-            let extra_rect = Rect {
-                size: extra.size(),
-                origin: (0, 0),
-            };
-            output_bufs.push(JxlOutputBuffer::from_image_rect_mut(
-                extra.get_rect_mut(extra_rect).into_raw(),
-            ));
-        }
-
-        match decoder_with_frame.process(&mut reader, &mut output_bufs) {
-            Ok(ProcessingResult::Complete { .. }) => break,
-            Ok(ProcessingResult::NeedsMoreInput { fallback, .. }) => {
-                decoder_with_frame = fallback;
-            }
-            Err(e) => return Err(format!("Decode error: {e}")),
-        }
-    }
-
-    // Convert f32 buffer to RGBA8
+/// Convert f32 interleaved buffer to RGBA8
+fn f32_buffer_to_rgba8(
+    main_buffer: &Image<f32>,
+    width: usize,
+    height: usize,
+    color_type: JxlColorType,
+) -> Vec<u8> {
+    let samples_per_pixel = color_type.samples_per_pixel();
     let mut rgba = vec![0u8; width * height * 4];
     for y in 0..height {
         let row = main_buffer.row(y);
@@ -192,6 +190,412 @@ pub fn decode_jxl_to_rgba(data: &[u8]) -> Result<DecodedImage, String> {
             }
         }
     }
+    rgba
+}
+
+// ---------------------------------------------------------------------------
+// Core decode: single frame (fast, non-progressive)
+// ---------------------------------------------------------------------------
+
+pub fn decode_jxl_to_rgba(data: &[u8]) -> Result<DecodedImage, String> {
+    let mut reader = BufReader::new(std::io::Cursor::new(data));
+
+    let mut options = JxlDecoderOptions::default();
+    options.adjust_orientation = true;
+    options.coalescing = true;
+    options.premultiply_output = true;
+
+    let decoder = JxlDecoder::new(options);
+
+    let mut decoder_with_info = match decoder.process(&mut reader) {
+        Ok(ProcessingResult::Complete { result }) => result,
+        Ok(ProcessingResult::NeedsMoreInput { .. }) => {
+            return Err("Incomplete header data".to_string());
+        }
+        Err(e) => return Err(format!("Header decode error: {e}")),
+    };
+
+    let basic_info = decoder_with_info.basic_info();
+    let (width, height) = basic_info.size;
+    let extra_channels = basic_info.extra_channels.clone();
+    let native_color_type = decoder_with_info.current_pixel_format().color_type;
+
+    let setup = setup_pixel_format(&mut decoder_with_info, &extra_channels, native_color_type);
+    let samples_per_pixel = setup.color_type.samples_per_pixel();
+
+    let (mut main_buffer, mut extra_bufs) =
+        alloc_buffers(width, height, samples_per_pixel, setup.extra_buf_count)?;
+
+    let rect = Rect {
+        size: main_buffer.size(),
+        origin: (0, 0),
+    };
+
+    // Get frame
+    let mut decoder_with_frame = match decoder_with_info.process(&mut reader) {
+        Ok(ProcessingResult::Complete { result }) => result,
+        Ok(ProcessingResult::NeedsMoreInput { .. }) => {
+            return Err("Incomplete frame header".to_string());
+        }
+        Err(e) => return Err(format!("Frame header error: {e}")),
+    };
+
+    // Decode frame
+    loop {
+        let mut output_bufs = vec![JxlOutputBuffer::from_image_rect_mut(
+            main_buffer.get_rect_mut(rect).into_raw(),
+        )];
+        for extra in &mut extra_bufs {
+            let er = Rect { size: extra.size(), origin: (0, 0) };
+            output_bufs.push(JxlOutputBuffer::from_image_rect_mut(
+                extra.get_rect_mut(er).into_raw(),
+            ));
+        }
+
+        match decoder_with_frame.process(&mut reader, &mut output_bufs) {
+            Ok(ProcessingResult::Complete { .. }) => break,
+            Ok(ProcessingResult::NeedsMoreInput { fallback, .. }) => {
+                decoder_with_frame = fallback;
+            }
+            Err(e) => return Err(format!("Decode error: {e}")),
+        }
+    }
+
+    let rgba = f32_buffer_to_rgba8(&main_buffer, width, height, setup.color_type);
+
+    Ok(DecodedImage {
+        pixels: rgba,
+        width: width as u32,
+        height: height as u32,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Core decode: animation (multi-frame)
+// ---------------------------------------------------------------------------
+
+pub fn decode_jxl_animation(data: &[u8]) -> Result<DecodedAnimation, String> {
+    let mut reader = BufReader::new(std::io::Cursor::new(data));
+
+    let mut options = JxlDecoderOptions::default();
+    options.adjust_orientation = true;
+    options.coalescing = true;
+    options.premultiply_output = true;
+
+    let decoder = JxlDecoder::new(options);
+
+    let mut decoder_with_info = match decoder.process(&mut reader) {
+        Ok(ProcessingResult::Complete { result }) => result,
+        Ok(ProcessingResult::NeedsMoreInput { .. }) => {
+            return Err("Incomplete header data".to_string());
+        }
+        Err(e) => return Err(format!("Header decode error: {e}")),
+    };
+
+    let basic_info = decoder_with_info.basic_info();
+    let (width, height) = basic_info.size;
+    let extra_channels = basic_info.extra_channels.clone();
+    let native_color_type = decoder_with_info.current_pixel_format().color_type;
+    let animation = basic_info.animation.clone();
+    let loop_count = animation.as_ref().map(|a| a.num_loops).unwrap_or(0);
+
+    let setup = setup_pixel_format(&mut decoder_with_info, &extra_channels, native_color_type);
+    let color_type = setup.color_type;
+    let samples_per_pixel = color_type.samples_per_pixel();
+
+    let mut frames = Vec::new();
+    let mut decoder = decoder_with_info;
+
+    loop {
+        // Get frame header - catch panic at end of animation
+        let decoder_with_frame =
+            match panic::catch_unwind(panic::AssertUnwindSafe(|| decoder.process(&mut reader))) {
+                Ok(Ok(ProcessingResult::Complete { result })) => result,
+                Ok(Ok(ProcessingResult::NeedsMoreInput { .. })) => break,
+                Ok(Err(_)) => break,
+                Err(_) => break,
+            };
+
+        let frame_header = decoder_with_frame.frame_header();
+        let duration_ms = (frame_header.duration.unwrap_or(100.0) as u32).max(16);
+
+        let (mut main_buffer, mut extra_bufs) =
+            alloc_buffers(width, height, samples_per_pixel, setup.extra_buf_count)?;
+        let rect = Rect { size: main_buffer.size(), origin: (0, 0) };
+
+        let mut frame_decoder = decoder_with_frame;
+        loop {
+            let mut output_bufs = vec![JxlOutputBuffer::from_image_rect_mut(
+                main_buffer.get_rect_mut(rect).into_raw(),
+            )];
+            for extra in &mut extra_bufs {
+                let er = Rect { size: extra.size(), origin: (0, 0) };
+                output_bufs.push(JxlOutputBuffer::from_image_rect_mut(
+                    extra.get_rect_mut(er).into_raw(),
+                ));
+            }
+
+            match frame_decoder
+                .process(&mut reader, &mut output_bufs)
+                .map_err(|e| e.to_string())?
+            {
+                ProcessingResult::Complete { result } => {
+                    decoder = result;
+                    break;
+                }
+                ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                    frame_decoder = fallback;
+                }
+            }
+        }
+
+        let rgba = f32_buffer_to_rgba8(&main_buffer, width, height, color_type);
+        frames.push(AnimationFrame {
+            pixels: rgba,
+            width: width as u32,
+            height: height as u32,
+            duration_ms,
+        });
+    }
+
+    if frames.is_empty() {
+        return Err("No frames decoded".to_string());
+    }
+
+    Ok(DecodedAnimation {
+        frames,
+        width: width as u32,
+        height: height as u32,
+        loop_count,
+    })
+}
+
+/// Check if JXL data contains an animation (peek at header).
+pub fn is_jxl_animation(data: &[u8]) -> bool {
+    let mut reader = BufReader::new(std::io::Cursor::new(data));
+    let mut options = JxlDecoderOptions::default();
+    options.adjust_orientation = true;
+    let decoder = JxlDecoder::new(options);
+
+    match decoder.process(&mut reader) {
+        Ok(ProcessingResult::Complete { result }) => {
+            result.basic_info().animation.is_some()
+        }
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core decode: progressive (chunked with flush_pixels)
+// ---------------------------------------------------------------------------
+
+pub fn decode_jxl_progressive<F>(
+    data: &[u8],
+    slow_chunk_pct: f32,
+    slow_delay_ms: u64,
+    mut on_progress: F,
+) -> Result<DecodedImage, String>
+where
+    F: FnMut(ProgressiveUpdate),
+{
+    use std::thread;
+    use std::time::Duration;
+
+    let file_size = data.len();
+    let chunk_size = if slow_chunk_pct > 0.0 {
+        ((file_size as f32 * slow_chunk_pct / 100.0) as usize).max(1024)
+    } else {
+        16 * 1024
+    };
+    let slow_delay = if slow_delay_ms > 0 {
+        Some(Duration::from_millis(slow_delay_ms))
+    } else {
+        None
+    };
+
+    // Track how much of `data` we've consumed
+    let mut consumed = 0usize;
+
+    let mut options = JxlDecoderOptions::default();
+    options.adjust_orientation = true;
+    options.coalescing = true;
+    options.premultiply_output = true;
+
+    let mut decoder = JxlDecoder::new(options);
+
+    // Feed chunks to get header
+    let mut decoder_with_info = loop {
+        let end = (consumed + chunk_size).min(file_size);
+        let mut chunk = &data[consumed..end];
+        let chunk_len = chunk.len();
+
+        match decoder.process(&mut chunk).map_err(|e| e.to_string())? {
+            ProcessingResult::Complete { result } => {
+                consumed += chunk_len - chunk.len();
+                break result;
+            }
+            ProcessingResult::NeedsMoreInput { fallback, .. } => {
+                consumed += chunk_len - chunk.len();
+                if consumed >= file_size {
+                    return Err("Incomplete header data".to_string());
+                }
+                if let Some(delay) = slow_delay {
+                    thread::sleep(delay);
+                }
+                decoder = fallback;
+            }
+        }
+    };
+
+    let basic_info = decoder_with_info.basic_info();
+    let (width, height) = basic_info.size;
+    let extra_channels = basic_info.extra_channels.clone();
+    let native_color_type = decoder_with_info.current_pixel_format().color_type;
+
+    // If animation, fall back to non-progressive
+    if basic_info.animation.is_some() {
+        return decode_jxl_to_rgba(data);
+    }
+
+    let setup = setup_pixel_format(&mut decoder_with_info, &extra_channels, native_color_type);
+    let color_type = setup.color_type;
+    let samples_per_pixel = color_type.samples_per_pixel();
+
+    let (mut main_buffer, mut extra_bufs) =
+        alloc_buffers(width, height, samples_per_pixel, setup.extra_buf_count)?;
+    let rect = Rect { size: main_buffer.size(), origin: (0, 0) };
+
+    // Parse frame header with LF preview flush
+    let mut sent_lf_preview = false;
+    let mut decoder_with_frame = loop {
+        let end = (consumed + chunk_size).min(file_size);
+        let mut chunk = &data[consumed..end];
+        let chunk_len = chunk.len();
+
+        let process_result = decoder_with_info.process(&mut chunk);
+        consumed += chunk_len - chunk.len();
+
+        match process_result.map_err(|e| e.to_string())? {
+            ProcessingResult::Complete { result } => break result,
+            ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
+                if consumed < file_size && !sent_lf_preview {
+                    let mut flush_bufs = vec![JxlOutputBuffer::from_image_rect_mut(
+                        main_buffer.get_rect_mut(rect).into_raw(),
+                    )];
+                    for extra in &mut extra_bufs {
+                        let er = Rect { size: extra.size(), origin: (0, 0) };
+                        flush_bufs.push(JxlOutputBuffer::from_image_rect_mut(
+                            extra.get_rect_mut(er).into_raw(),
+                        ));
+                    }
+                    let _ = fallback.flush_pixels(&mut flush_bufs);
+                    drop(flush_bufs);
+
+                    let partial = f32_buffer_to_rgba8(&main_buffer, width, height, color_type);
+                    if partial.iter().any(|&b| b != 0) {
+                        on_progress(ProgressiveUpdate {
+                            pixels: partial,
+                            width: width as u32,
+                            height: height as u32,
+                            completed_passes: 0,
+                            progress_pct: consumed * 100 / file_size,
+                            is_final: false,
+                        });
+                        sent_lf_preview = true;
+                    }
+                }
+                if consumed >= file_size {
+                    return Err("Incomplete frame header".to_string());
+                }
+                if let Some(delay) = slow_delay {
+                    thread::sleep(delay);
+                }
+                decoder_with_info = fallback;
+            }
+        }
+    };
+
+    // Progressive frame decode with flush_pixels()
+    let mut last_passes = 0usize;
+    let mut last_flush_pct = 0usize;
+    let flush_interval_pct: usize = if slow_delay.is_some() { 2 } else { 5 };
+
+    loop {
+        let mut output_bufs = vec![JxlOutputBuffer::from_image_rect_mut(
+            main_buffer.get_rect_mut(rect).into_raw(),
+        )];
+        for extra in &mut extra_bufs {
+            let er = Rect { size: extra.size(), origin: (0, 0) };
+            output_bufs.push(JxlOutputBuffer::from_image_rect_mut(
+                extra.get_rect_mut(er).into_raw(),
+            ));
+        }
+
+        let end = (consumed + chunk_size).min(file_size);
+        let mut chunk = &data[consumed..end];
+        let chunk_len = chunk.len();
+
+        let process_result = decoder_with_frame.process(&mut chunk, &mut output_bufs);
+        consumed += chunk_len - chunk.len();
+        drop(output_bufs);
+
+        match process_result.map_err(|e| e.to_string())? {
+            ProcessingResult::Complete { .. } => break,
+            ProcessingResult::NeedsMoreInput { mut fallback, .. } => {
+                let progress_pct = consumed * 100 / file_size.max(1);
+                let current_passes = fallback.num_completed_passes();
+                let pass_changed = current_passes > last_passes;
+                let interval_hit = progress_pct >= last_flush_pct + flush_interval_pct;
+
+                if pass_changed || interval_hit {
+                    if pass_changed {
+                        last_passes = current_passes;
+                    }
+
+                    let mut flush_bufs = vec![JxlOutputBuffer::from_image_rect_mut(
+                        main_buffer.get_rect_mut(rect).into_raw(),
+                    )];
+                    for extra in &mut extra_bufs {
+                        let er = Rect { size: extra.size(), origin: (0, 0) };
+                        flush_bufs.push(JxlOutputBuffer::from_image_rect_mut(
+                            extra.get_rect_mut(er).into_raw(),
+                        ));
+                    }
+                    fallback.flush_pixels(&mut flush_bufs).map_err(|e| e.to_string())?;
+                    drop(flush_bufs);
+
+                    let partial = f32_buffer_to_rgba8(&main_buffer, width, height, color_type);
+                    on_progress(ProgressiveUpdate {
+                        pixels: partial,
+                        width: width as u32,
+                        height: height as u32,
+                        completed_passes: current_passes,
+                        progress_pct,
+                        is_final: false,
+                    });
+                    last_flush_pct = progress_pct;
+                }
+
+                if consumed >= file_size {
+                    return Err("Incomplete frame data".to_string());
+                }
+                if let Some(delay) = slow_delay {
+                    thread::sleep(delay);
+                }
+                decoder_with_frame = fallback;
+            }
+        }
+    }
+
+    let rgba = f32_buffer_to_rgba8(&main_buffer, width, height, color_type);
+    on_progress(ProgressiveUpdate {
+        pixels: rgba.clone(),
+        width: width as u32,
+        height: height as u32,
+        completed_passes: last_passes,
+        progress_pct: 100,
+        is_final: true,
+    });
 
     Ok(DecodedImage {
         pixels: rgba,
@@ -204,7 +608,6 @@ pub fn decode_jxl_to_rgba(data: &[u8]) -> Result<DecodedImage, String> {
 // C FFI (for iOS / Swift)
 // ---------------------------------------------------------------------------
 
-/// Opaque handle to a decoded image
 #[repr(C)]
 pub struct JxlImage {
     pub pixels: *mut u8,
@@ -213,48 +616,127 @@ pub struct JxlImage {
     pub pixels_len: u32,
 }
 
-/// Decode JXL data, returns null on error.
-/// Caller must free with `jxl_image_free`.
+#[repr(C)]
+pub struct JxlAnimationResult {
+    pub frames: *mut JxlAnimFrame,
+    pub frame_count: u32,
+    pub width: u32,
+    pub height: u32,
+    pub loop_count: u32,
+}
+
+#[repr(C)]
+pub struct JxlAnimFrame {
+    pub pixels: *mut u8,
+    pub pixels_len: u32,
+    pub width: u32,
+    pub height: u32,
+    pub duration_ms: u32,
+}
+
+fn box_image(img: DecodedImage) -> *mut JxlImage {
+    let mut pixels = img.pixels.into_boxed_slice();
+    let ptr = pixels.as_mut_ptr();
+    let len = pixels.len() as u32;
+    std::mem::forget(pixels);
+
+    Box::into_raw(Box::new(JxlImage {
+        pixels: ptr,
+        width: img.width,
+        height: img.height,
+        pixels_len: len,
+    }))
+}
+
 #[no_mangle]
 pub extern "C" fn jxl_decode(data: *const u8, data_len: usize) -> *mut JxlImage {
     if data.is_null() || data_len == 0 {
         return std::ptr::null_mut();
     }
     let slice = unsafe { std::slice::from_raw_parts(data, data_len) };
-
     match decode_jxl_to_rgba(slice) {
-        Ok(img) => {
-            let mut pixels = img.pixels.into_boxed_slice();
-            let ptr = pixels.as_mut_ptr();
-            let len = pixels.len() as u32;
-            std::mem::forget(pixels);
+        Ok(img) => box_image(img),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
 
-            let result = Box::new(JxlImage {
-                pixels: ptr,
-                width: img.width,
-                height: img.height,
-                pixels_len: len,
-            });
-            Box::into_raw(result)
+#[no_mangle]
+pub extern "C" fn jxl_is_animation(data: *const u8, data_len: usize) -> u8 {
+    if data.is_null() || data_len == 0 {
+        return 0;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(data, data_len) };
+    if is_jxl_animation(slice) { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn jxl_decode_animation(data: *const u8, data_len: usize) -> *mut JxlAnimationResult {
+    if data.is_null() || data_len == 0 {
+        return std::ptr::null_mut();
+    }
+    let slice = unsafe { std::slice::from_raw_parts(data, data_len) };
+    match decode_jxl_animation(slice) {
+        Ok(anim) => {
+            let mut c_frames: Vec<JxlAnimFrame> = anim.frames.into_iter().map(|f| {
+                let mut pixels = f.pixels.into_boxed_slice();
+                let ptr = pixels.as_mut_ptr();
+                let len = pixels.len() as u32;
+                std::mem::forget(pixels);
+                JxlAnimFrame {
+                    pixels: ptr,
+                    pixels_len: len,
+                    width: f.width,
+                    height: f.height,
+                    duration_ms: f.duration_ms,
+                }
+            }).collect();
+            let frame_count = c_frames.len() as u32;
+            let frames_ptr = c_frames.as_mut_ptr();
+            std::mem::forget(c_frames);
+
+            Box::into_raw(Box::new(JxlAnimationResult {
+                frames: frames_ptr,
+                frame_count,
+                width: anim.width,
+                height: anim.height,
+                loop_count: anim.loop_count,
+            }))
         }
         Err(_) => std::ptr::null_mut(),
     }
 }
 
-/// Free a decoded image.
+#[no_mangle]
+pub extern "C" fn jxl_animation_free(anim: *mut JxlAnimationResult) {
+    if !anim.is_null() {
+        unsafe {
+            let anim = Box::from_raw(anim);
+            let frames = Vec::from_raw_parts(anim.frames, anim.frame_count as usize, anim.frame_count as usize);
+            for f in frames {
+                if !f.pixels.is_null() {
+                    let _ = Vec::from_raw_parts(f.pixels, f.pixels_len as usize, f.pixels_len as usize);
+                }
+            }
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn jxl_image_free(img: *mut JxlImage) {
     if !img.is_null() {
         unsafe {
             let img = Box::from_raw(img);
             if !img.pixels.is_null() {
-                let _ = Vec::from_raw_parts(img.pixels, img.pixels_len as usize, img.pixels_len as usize);
+                let _ = Vec::from_raw_parts(
+                    img.pixels,
+                    img.pixels_len as usize,
+                    img.pixels_len as usize,
+                );
             }
         }
     }
 }
 
-/// Get last error message (for debugging). Returns static string.
 #[no_mangle]
 pub extern "C" fn jxl_decode_with_error(
     data: *const u8,
@@ -267,22 +749,8 @@ pub extern "C" fn jxl_decode_with_error(
         return std::ptr::null_mut();
     }
     let slice = unsafe { std::slice::from_raw_parts(data, data_len) };
-
     match decode_jxl_to_rgba(slice) {
-        Ok(img) => {
-            let mut pixels = img.pixels.into_boxed_slice();
-            let ptr = pixels.as_mut_ptr();
-            let len = pixels.len() as u32;
-            std::mem::forget(pixels);
-
-            let result = Box::new(JxlImage {
-                pixels: ptr,
-                width: img.width,
-                height: img.height,
-                pixels_len: len,
-            });
-            Box::into_raw(result)
-        }
+        Ok(img) => box_image(img),
         Err(e) => {
             write_error(error_buf, error_buf_len, &e);
             std::ptr::null_mut()
@@ -298,7 +766,7 @@ fn write_error(buf: *mut u8, buf_len: usize, msg: &str) {
     let copy_len = bytes.len().min(buf_len - 1);
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, copy_len);
-        *buf.add(copy_len) = 0; // null terminate
+        *buf.add(copy_len) = 0;
     }
 }
 
@@ -313,6 +781,7 @@ mod android {
     use jni::sys::jobject;
     use jni::JNIEnv;
 
+    /// Standard single-frame decode
     #[no_mangle]
     pub extern "system" fn Java_com_jxlui_JxlDecoder_nativeDecode<'a>(
         mut env: JNIEnv<'a>,
@@ -329,7 +798,137 @@ mod android {
             Err(_) => return JObject::null().into_raw(),
         };
 
-        // Create DecodedImage Kotlin object
+        create_decoded_image_object(&mut env, &decoded)
+    }
+
+    /// Check if data is animation
+    #[no_mangle]
+    pub extern "system" fn Java_com_jxlui_JxlDecoder_nativeIsAnimation<'a>(
+        mut env: JNIEnv<'a>,
+        _class: JClass<'a>,
+        data: JByteArray<'a>,
+    ) -> u8 {
+        let bytes = match env.convert_byte_array(&data) {
+            Ok(b) => b,
+            Err(_) => return 0,
+        };
+        if is_jxl_animation(&bytes) { 1 } else { 0 }
+    }
+
+    /// Decode animation, returns array of DecodedImage with durations
+    #[no_mangle]
+    pub extern "system" fn Java_com_jxlui_JxlDecoder_nativeDecodeAnimation<'a>(
+        mut env: JNIEnv<'a>,
+        _class: JClass<'a>,
+        data: JByteArray<'a>,
+    ) -> jobject {
+        let bytes = match env.convert_byte_array(&data) {
+            Ok(b) => b,
+            Err(_) => return JObject::null().into_raw(),
+        };
+
+        let anim = match decode_jxl_animation(&bytes) {
+            Ok(a) => a,
+            Err(_) => return JObject::null().into_raw(),
+        };
+
+        // Create ArrayList<AnimFrame>
+        let list_class = match env.find_class("java/util/ArrayList") {
+            Ok(c) => c,
+            Err(_) => return JObject::null().into_raw(),
+        };
+        let list = match env.new_object(&list_class, "()V", &[]) {
+            Ok(o) => o,
+            Err(_) => return JObject::null().into_raw(),
+        };
+
+        let frame_class = match env.find_class("com/jxlui/AnimFrame") {
+            Ok(c) => c,
+            Err(_) => return JObject::null().into_raw(),
+        };
+
+        for frame in &anim.frames {
+            let pixel_array = match env.byte_array_from_slice(&frame.pixels) {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
+
+            let frame_obj = match env.new_object(
+                &frame_class,
+                "([BIII)V",
+                &[
+                    JValue::Object(&pixel_array.into()),
+                    JValue::Int(frame.width as i32),
+                    JValue::Int(frame.height as i32),
+                    JValue::Int(frame.duration_ms as i32),
+                ],
+            ) {
+                Ok(o) => o,
+                Err(_) => continue,
+            };
+
+            let _ = env.call_method(&list, "add", "(Ljava/lang/Object;)Z", &[JValue::Object(&frame_obj)]);
+        }
+
+        list.into_raw()
+    }
+
+    /// Progressive decode with callback
+    #[no_mangle]
+    pub extern "system" fn Java_com_jxlui_JxlDecoder_nativeDecodeProgressive<'a>(
+        mut env: JNIEnv<'a>,
+        _class: JClass<'a>,
+        data: JByteArray<'a>,
+        slow_chunk_pct: f32,
+        slow_delay_ms: i64,
+        listener: JObject<'a>,
+    ) -> jobject {
+        let bytes = match env.convert_byte_array(&data) {
+            Ok(b) => b,
+            Err(_) => return JObject::null().into_raw(),
+        };
+
+        let listener_global = match env.new_global_ref(&listener) {
+            Ok(g) => g,
+            Err(_) => return JObject::null().into_raw(),
+        };
+
+        let jvm = match env.get_java_vm() {
+            Ok(vm) => vm,
+            Err(_) => return JObject::null().into_raw(),
+        };
+
+        let decoded = decode_jxl_progressive(
+            &bytes,
+            slow_chunk_pct,
+            slow_delay_ms as u64,
+            |update| {
+                if let Ok(mut cb_env) = jvm.attach_current_thread() {
+                    if let Ok(pixel_array) = cb_env.byte_array_from_slice(&update.pixels) {
+                        let _ = cb_env.call_method(
+                            &listener_global,
+                            "onProgress",
+                            "([BIIII)V",
+                            &[
+                                JValue::Object(&pixel_array.into()),
+                                JValue::Int(update.width as i32),
+                                JValue::Int(update.height as i32),
+                                JValue::Int(update.completed_passes as i32),
+                                JValue::Int(update.progress_pct as i32),
+                            ],
+                        );
+                    }
+                }
+            },
+        );
+
+        match decoded {
+            Ok(img) => create_decoded_image_object(&mut env, &img),
+            Err(_) => JObject::null().into_raw(),
+        }
+    }
+
+    fn create_decoded_image_object(env: &mut JNIEnv, decoded: &DecodedImage) -> jobject {
         let pixel_array = match env.byte_array_from_slice(&decoded.pixels) {
             Ok(a) => a,
             Err(_) => return JObject::null().into_raw(),

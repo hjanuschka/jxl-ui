@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -276,20 +277,73 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
             }
         }
 
-        // Bottom status bar
+        // Bottom bar: status + animation controls
         if (state.bitmap != null) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.BottomCenter)
-                    .background(BgElevated.copy(alpha = 0.8f))
-                    .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    .background(BgElevated.copy(alpha = 0.9f))
+                    .navigationBarsPadding(),
             ) {
-                Text("${state.width}x${state.height}", color = TextMuted, fontSize = 12.sp)
-                Text("${state.decodeTimeMs}ms", color = TextMuted, fontSize = 12.sp)
-                Text("jxl-rs", color = Accent, fontSize = 12.sp)
+                // Animation controls
+                if (state.isAnimation && state.frameCount > 1) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // Play/pause
+                        IconButton(
+                            onClick = { viewModel.togglePlayPause() },
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Text(
+                                if (state.isPlaying) "\u23F8" else "\u25B6",
+                                color = Accent,
+                                fontSize = 16.sp,
+                            )
+                        }
+
+                        // Frame counter
+                        Text(
+                            "${state.currentFrame + 1}/${state.frameCount}",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp),
+                        )
+
+                        // Seek slider
+                        Slider(
+                            value = state.currentFrame.toFloat(),
+                            onValueChange = { viewModel.seekFrame(it.toInt()) },
+                            valueRange = 0f..(state.frameCount - 1).toFloat().coerceAtLeast(0f),
+                            modifier = Modifier.weight(1f),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Accent,
+                                activeTrackColor = Accent,
+                                inactiveTrackColor = BgSurface,
+                            ),
+                        )
+                    }
+                }
+
+                // Status row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("${state.width}x${state.height}", color = TextMuted, fontSize = 12.sp)
+                    Text("${state.decodeTimeMs}ms", color = TextMuted, fontSize = 12.sp)
+                    if (state.isAnimation) {
+                        Text("${state.frameCount} frames", color = TextMuted, fontSize = 12.sp)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text("jxl-rs", color = Accent, fontSize = 12.sp)
+                }
             }
         }
     }
