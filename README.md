@@ -12,6 +12,7 @@
   <a href="https://github.com/hjanuschka/jxl-ui/releases">Download</a> &bull;
   <a href="#features">Features</a> &bull;
   <a href="#installation">Installation</a> &bull;
+  <a href="#mobile-apps-local-build">Mobile</a> &bull;
   <a href="#keyboard-shortcuts">Shortcuts</a>
 </p>
 
@@ -70,6 +71,54 @@ cd jxl-ui
 # Build and run
 cargo +nightly run --release -- path/to/image.jxl
 ```
+
+## Mobile Apps (Local Build)
+
+JXL-UI also includes native mobile apps in `mobile/`:
+
+- **Android** app (`mobile/android`) built with Kotlin + Jetpack Compose
+- **iOS** app (`mobile/ios`) built with Swift + SwiftUI
+- Shared Rust decoder core in `mobile/jxl-core`
+
+### Android
+
+```bash
+cd mobile/android
+
+# Build Rust JNI libraries (.so)
+./build-rust.sh
+
+# Build APK
+./gradlew assembleDebug
+
+# APK output
+# app/build/outputs/apk/debug/app-debug.apk
+```
+
+Optional install to device/emulator:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+### iOS
+
+```bash
+cd mobile/ios
+
+# Build Rust XCFramework used by Swift app
+./build-rust.sh
+
+# Generate Xcode project
+xcodegen generate
+
+# Open in Xcode
+open JxlUI.xcodeproj
+```
+
+Then pick simulator/device in Xcode and run.
+
+For more mobile details, see [`mobile/README.md`](mobile/README.md).
 
 ## Requirements
 
