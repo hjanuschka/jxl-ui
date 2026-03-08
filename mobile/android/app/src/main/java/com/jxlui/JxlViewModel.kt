@@ -25,6 +25,18 @@ class JxlViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(ImageState())
     val state: StateFlow<ImageState> = _state
 
+    /** List of bundled sample JXL files from assets/samples/ */
+    val sampleFiles: List<String> by lazy {
+        try {
+            application.assets.list("samples")
+                ?.filter { it.endsWith(".jxl") }
+                ?.sorted()
+                ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     fun loadFromUri(uri: Uri, fileName: String? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             _state.value = ImageState(isLoading = true, fileName = fileName)
@@ -36,22 +48,44 @@ class JxlViewModel(application: Application) : AndroidViewModel(application) {
                 val data = inputStream.readBytes()
                 inputStream.close()
 
-                val startTime = System.nanoTime()
-                val bitmap = JxlDecoder.decode(data)
-                    ?: throw Exception("Failed to decode JXL image")
-                val elapsed = (System.nanoTime() - startTime) / 1_000_000
-
-                _state.value = ImageState(
-                    bitmap = bitmap,
-                    fileName = fileName ?: "image.jxl",
-                    width = bitmap.width,
-                    height = bitmap.height,
-                    decodeTimeMs = elapsed,
-                    fileSizeBytes = data.size.toLong(),
-                )
+                decodeAndEmit(data, fileName ?: "image.jxl")
             } catch (e: Exception) {
                 _state.value = ImageState(error = e.message ?: "Unknown error")
             }
         }
+    }
+
+    fun loadSample(name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.value = ImageState(isLoading = true, fileName = name)
+
+            try {
+                val context = getApplication<Application>()
+                val data = context.assets.open("samples/$name").readBytes()
+                decodeAndEmit(data, name)
+            } catch (e: Exception) {
+                _state.value = ImageState(error = e.message ?: "Unknown error")
+            }
+        }
+    }
+
+    fun clearImage() {
+        _state.value = ImageState()
+    }
+
+    private fun decodeAndEmit(data: ByteArray, name: String) {
+        val startTime = System.nanoTime()
+        val bitmap = JxlDecoder.decode(data)
+            ?: throw Exception("Failed to decode JXL image")
+        val elapsed = (System.nanoTime() - startTime) / 1_000_000
+
+        _state.value = ImageState(
+            bitmap = bitmap,
+            fileName = name,
+            width = bitmap.width,
+            height = bitmap.height,
+            decodeTimeMs = elapsed,
+            fileSizeBytes = data.size.toLong(),
+        )
     }
 }

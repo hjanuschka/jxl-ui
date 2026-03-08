@@ -13,6 +13,7 @@ TARGETS=(
     "aarch64-linux-android:arm64-v8a"
     "armv7-linux-androideabi:armeabi-v7a"
     "x86_64-linux-android:x86_64"
+    "i686-linux-android:x86"
 )
 
 echo "Building jxl-mobile-core for Android..."

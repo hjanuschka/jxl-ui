@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var errorMessage: String?
     @State private var showFilePicker = false
     @State private var showInfo = false
+    @State private var showGallery = true
 
     // Zoom & pan
     @State private var scale: CGFloat = 1
@@ -34,12 +35,22 @@ struct ContentView: View {
         let fileName: String
     }
 
+    /// Bundled sample JXL files
+    var sampleFiles: [String] {
+        guard let path = Bundle.main.resourcePath else { return [] }
+        let samplesPath = (path as NSString).appendingPathComponent("Samples")
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: samplesPath) else { return [] }
+        return files.filter { $0.hasSuffix(".jxl") }.sorted()
+    }
+
     var body: some View {
         ZStack {
             Color.bgBase.ignoresSafeArea()
 
             // Main content
-            if isLoading {
+            if showGallery && image == nil && !isLoading {
+                galleryView
+            } else if isLoading {
                 VStack(spacing: 16) {
                     ProgressView()
                         .tint(.accent)
@@ -58,6 +69,16 @@ struct ContentView: View {
                         .font(.system(size: 13))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
+                    Spacer().frame(height: 16)
+                    Button("Back to gallery") {
+                        errorMessage = nil
+                        showGallery = true
+                    }
+                    .foregroundColor(.textSecondary)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(Color.bgSurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             } else if let image = image {
                 Image(uiImage: image)
@@ -105,32 +126,27 @@ struct ContentView: View {
                     .onTapGesture(count: 1) {
                         withAnimation { showInfo.toggle() }
                     }
-            } else {
-                // Empty state
-                VStack(spacing: 8) {
-                    Text("JXL Viewer")
-                        .foregroundColor(.textPrimary)
-                        .font(.system(size: 24, weight: .bold))
-                    Text("Powered by jxl-rs")
-                        .foregroundColor(.textMuted)
-                        .font(.system(size: 13))
-                    Spacer().frame(height: 24)
-                    Button(action: { showFilePicker = true }) {
-                        Text("Open JXL File")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 12)
-                            .background(.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                }
             }
 
             // Top bar
-            VStack {
+            VStack(spacing: 0) {
                 HStack {
-                    Text(imageInfo?.fileName ?? "JXL-UI")
+                    if image != nil {
+                        Button(action: {
+                            image = nil
+                            imageInfo = nil
+                            showGallery = true
+                            showInfo = false
+                        }) {
+                            Image(systemName: "chevron.left")
+                                .foregroundColor(.textPrimary)
+                                .frame(width: 40, height: 40)
+                                .background(Color.bgSurface)
+                                .clipShape(Circle())
+                        }
+                    }
+
+                    Text(imageInfo?.fileName ?? "JXL Viewer")
                         .foregroundColor(.textPrimary)
                         .font(.system(size: 16, weight: .medium))
                         .lineLimit(1)
@@ -147,6 +163,8 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
+                .padding(.bottom, 8)
+                .background(Color.bgElevated.opacity(0.95))
 
                 Spacer()
 
@@ -175,10 +193,14 @@ struct ContentView: View {
                 }
 
                 // Bottom status
-                if image != nil, let info = imageInfo {
+                if image != nil {
                     HStack(spacing: 12) {
-                        Text("\(info.width)x\(info.height)")
-                        Text("\(info.decodeTimeMs)ms")
+                        if let info = imageInfo {
+                            Text("\(info.width)x\(info.height)")
+                            Text("\(info.decodeTimeMs)ms")
+                        }
+                        Text("jxl-rs")
+                            .foregroundColor(.accent)
                     }
                     .foregroundColor(.textMuted)
                     .font(.system(size: 12))
@@ -196,6 +218,7 @@ struct ContentView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
+                    showGallery = false
                     loadFile(url: url)
                 }
             case .failure(let error):
@@ -204,17 +227,75 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Gallery View
+
+    private var galleryView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("JXL Viewer")
+                    .foregroundColor(.textPrimary)
+                    .font(.system(size: 24, weight: .bold))
+                Text("Powered by jxl-rs")
+                    .foregroundColor(.textMuted)
+                    .font(.system(size: 13))
+
+                // Open from device
+                Button(action: { showFilePicker = true }) {
+                    Text("Open from Device")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+
+                Spacer().frame(height: 4)
+
+                Text("SAMPLE IMAGES (\(sampleFiles.count))")
+                    .foregroundColor(.textMuted)
+                    .font(.system(size: 10, weight: .bold))
+
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8),
+                ], spacing: 8) {
+                    ForEach(sampleFiles, id: \.self) { name in
+                        Button(action: {
+                            showGallery = false
+                            loadSample(name: name)
+                        }) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("JXL")
+                                    .foregroundColor(.accent)
+                                    .font(.system(size: 11, weight: .bold))
+                                Text(name.replacingOccurrences(of: ".jxl", with: ""))
+                                    .foregroundColor(.textPrimary)
+                                    .font(.system(size: 13))
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(Color.bgSurface)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 64) // below top bar
+        }
+    }
+
+    // MARK: - Loading
+
     private func loadFile(url: URL) {
         isLoading = true
         errorMessage = nil
         image = nil
         imageInfo = nil
-
-        // Reset zoom
-        scale = 1
-        lastScale = 1
-        offset = .zero
-        lastOffset = .zero
+        resetZoom()
 
         DispatchQueue.global(qos: .userInitiated).async {
             let accessing = url.startAccessingSecurityScopedResource()
@@ -222,25 +303,7 @@ struct ContentView: View {
 
             do {
                 let data = try Data(contentsOf: url)
-                guard let decoded = JxlDecoder.decode(data) else {
-                    DispatchQueue.main.async {
-                        self.errorMessage = "Failed to decode JXL image"
-                        self.isLoading = false
-                    }
-                    return
-                }
-
-                DispatchQueue.main.async {
-                    self.image = decoded.image
-                    self.imageInfo = ImageInfo(
-                        width: decoded.width,
-                        height: decoded.height,
-                        decodeTimeMs: decoded.decodeTimeMs,
-                        fileSizeBytes: data.count,
-                        fileName: url.lastPathComponent
-                    )
-                    self.isLoading = false
-                }
+                decodeAndShow(data: data, name: url.lastPathComponent)
             } catch {
                 DispatchQueue.main.async {
                     self.errorMessage = error.localizedDescription
@@ -248,6 +311,55 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private func loadSample(name: String) {
+        isLoading = true
+        errorMessage = nil
+        image = nil
+        imageInfo = nil
+        resetZoom()
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let path = Bundle.main.path(forResource: name, ofType: nil, inDirectory: "Samples"),
+                  let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+                DispatchQueue.main.async {
+                    self.errorMessage = "Cannot read sample file"
+                    self.isLoading = false
+                }
+                return
+            }
+            decodeAndShow(data: data, name: name)
+        }
+    }
+
+    private func decodeAndShow(data: Data, name: String) {
+        guard let decoded = JxlDecoder.decode(data) else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Failed to decode JXL image"
+                self.isLoading = false
+            }
+            return
+        }
+
+        DispatchQueue.main.async {
+            self.image = decoded.image
+            self.imageInfo = ImageInfo(
+                width: decoded.width,
+                height: decoded.height,
+                decodeTimeMs: decoded.decodeTimeMs,
+                fileSizeBytes: data.count,
+                fileName: name
+            )
+            self.isLoading = false
+        }
+    }
+
+    private func resetZoom() {
+        scale = 1
+        lastScale = 1
+        offset = .zero
+        lastOffset = .zero
     }
 }
 

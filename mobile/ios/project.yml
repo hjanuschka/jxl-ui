@@ -15,6 +15,11 @@ targets:
     platform: iOS
     sources:
       - path: JxlUI
+        excludes:
+          - "Samples/**"
+      - path: JxlUI/Samples
+        buildPhase: resources
+        type: folder
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.jxlui.app
       INFOPLIST_FILE: JxlUI/Info.plist

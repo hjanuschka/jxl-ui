@@ -13,9 +13,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -30,6 +34,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -77,16 +82,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JxlViewerScreen(viewModel: JxlViewModel) {
     val state by viewModel.state.collectAsState()
     var showInfo by remember { mutableStateOf(false) }
-
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let { viewModel.loadFromUri(it) }
+        uri?.let {
+            viewModel.loadFromUri(it)
+        }
     }
 
     Box(
@@ -97,7 +102,6 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
         // Main content
         when {
             state.isLoading -> {
-                // Loading
                 Column(
                     modifier = Modifier.align(Alignment.Center),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -109,7 +113,6 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
             }
 
             state.error != null -> {
-                // Error
                 Column(
                     modifier = Modifier
                         .align(Alignment.Center)
@@ -124,6 +127,16 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
                         fontSize = 13.sp,
                         textAlign = TextAlign.Center,
                     )
+                    Spacer(Modifier.height(24.dp))
+                    Button(
+                        onClick = {
+                            viewModel.clearImage()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = BgSurface),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("Back to gallery", color = TextSecondary)
+                    }
                 }
             }
 
@@ -149,7 +162,6 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onDoubleTap = {
-                                    // Double-tap to reset
                                     scale = 1f
                                     offsetX = 0f
                                     offsetY = 0f
@@ -169,23 +181,18 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
             }
 
             else -> {
-                // Empty state
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text("JXL Viewer", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Powered by jxl-rs", color = TextMuted, fontSize = 13.sp)
-                    Spacer(Modifier.height(32.dp))
-                    Button(
-                        onClick = { filePicker.launch(arrayOf("*/*")) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text("Open JXL File", fontSize = 16.sp)
-                    }
-                }
+                // Gallery / empty state
+                SampleGallery(
+                    samples = viewModel.sampleFiles,
+                    onSelect = { name ->
+                        viewModel.loadSample(name)
+                    },
+                    onOpenFile = { filePicker.launch(arrayOf("*/*")) },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .padding(top = 56.dp)
+                )
             }
         }
 
@@ -193,21 +200,40 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(BgElevated.copy(alpha = 0.95f))
                 .statusBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // File name
+            if (state.bitmap != null) {
+                // Back to gallery
+                IconButton(
+                    onClick = {
+                        viewModel.clearImage()
+                        showInfo = false
+                    },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(BgSurface),
+                ) {
+                    Text("<", color = TextPrimary, fontSize = 18.sp)
+                }
+                Spacer(Modifier.width(12.dp))
+            }
+
             Text(
-                text = state.fileName ?: "JXL-UI",
+                text = state.fileName ?: "JXL Viewer",
                 color = TextPrimary,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
 
-            // Open button
+            // Open file button
             IconButton(
                 onClick = { filePicker.launch(arrayOf("*/*")) },
                 modifier = Modifier
@@ -236,13 +262,11 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Image Info", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
-
                     InfoRow("Size", "${state.width} x ${state.height}")
                     InfoRow("Megapixels", "%.2f MP".format(state.width.toLong() * state.height / 1_000_000.0))
                     InfoRow("Decode time", "${state.decodeTimeMs} ms")
                     if (state.fileSizeBytes > 0) {
-                        val kb = state.fileSizeBytes / 1024.0
-                        InfoRow("File size", "%.1f KB".format(kb))
+                        InfoRow("File size", "%.1f KB".format(state.fileSizeBytes / 1024.0))
                     }
                     if (state.decodeTimeMs > 0) {
                         val mpps = (state.width.toLong() * state.height) / (state.decodeTimeMs / 1000.0) / 1_000_000.0
@@ -265,6 +289,83 @@ fun JxlViewerScreen(viewModel: JxlViewModel) {
             ) {
                 Text("${state.width}x${state.height}", color = TextMuted, fontSize = 12.sp)
                 Text("${state.decodeTimeMs}ms", color = TextMuted, fontSize = 12.sp)
+                Text("jxl-rs", color = Accent, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun SampleGallery(
+    samples: List<String>,
+    onSelect: (String) -> Unit,
+    onOpenFile: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.padding(horizontal = 16.dp)) {
+        Text(
+            "JXL Viewer",
+            color = TextPrimary,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            "Powered by jxl-rs",
+            color = TextMuted,
+            fontSize = 13.sp,
+        )
+        Spacer(Modifier.height(16.dp))
+
+        // Open from device button
+        Button(
+            onClick = onOpenFile,
+            colors = ButtonDefaults.buttonColors(containerColor = Accent),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Open from Device", fontSize = 15.sp)
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        Text(
+            "SAMPLE IMAGES (${samples.size})",
+            color = TextMuted,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(8.dp))
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(samples) { name ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(name) },
+                    color = BgSurface,
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            "JXL",
+                            color = Accent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            name.removeSuffix(".jxl"),
+                            color = TextPrimary,
+                            fontSize = 13.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
     }
