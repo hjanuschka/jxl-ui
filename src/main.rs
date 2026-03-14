@@ -743,7 +743,7 @@ impl eframe::App for JxlApp {
 
                                         // Title
                                         let title = if tab.title.len() > 16 {
-                                            format!("{}…", &tab.title[..15])
+                                            format!("{}...", &tab.title[..15])
                                         } else {
                                             tab.title.clone()
                                         };
@@ -756,7 +756,7 @@ impl eframe::App for JxlApp {
                                                 // Close button
                                                 let close_btn = ui.add(
                                                     egui::Button::new(
-                                                        RichText::new("×")
+                                                        RichText::new("x")
                                                             .size(14.0)
                                                             .color(theme::TEXT_MUTED),
                                                     )
@@ -893,14 +893,14 @@ impl eframe::App for JxlApp {
                         // File info
                         if let Some((w, h)) = tab.dimensions {
                             ui.label(
-                                RichText::new(format!("{}×{}", w, h))
+                                RichText::new(format!("{}x{}", w, h))
                                     .size(12.0)
                                     .color(theme::TEXT_MUTED),
                             );
                         }
 
                         if let Some(time) = tab.decode_time {
-                            ui.label(RichText::new("•").size(12.0).color(theme::TEXT_MUTED));
+                            ui.label(RichText::new("-").size(12.0).color(theme::TEXT_MUTED));
                             ui.label(
                                 RichText::new(format!("{:.0}ms", time.as_secs_f64() * 1000.0))
                                     .size(12.0)
@@ -910,7 +910,7 @@ impl eframe::App for JxlApp {
 
                         // Zoom indicator
                         if !tab.zoom_fit || tab.zoom != 1.0 {
-                            ui.label(RichText::new("•").size(12.0).color(theme::TEXT_MUTED));
+                            ui.label(RichText::new("-").size(12.0).color(theme::TEXT_MUTED));
                             let zoom_label = if tab.zoom_fit {
                                 format!("Fit x{:.0}%", tab.zoom * 100.0)
                             } else {
@@ -1260,7 +1260,7 @@ impl eframe::App for JxlApp {
 
                                 // Keyboard hints
                                 ui.label(
-                                    RichText::new("⌘O to open  •  ⌘T new tab  •  ⌘W close tab")
+                                    RichText::new("⌘O to open  -  ⌘T new tab  -  ⌘W close tab")
                                         .size(12.0)
                                         .color(theme::TEXT_MUTED),
                                 );
@@ -1427,7 +1427,7 @@ impl eframe::App for JxlApp {
                             if ui
                                 .add(
                                     egui::Button::new(
-                                        RichText::new("✕").size(14.0).color(theme::TEXT_MUTED),
+                                        RichText::new("X").size(14.0).color(theme::TEXT_MUTED),
                                     )
                                     .frame(false),
                                 )
@@ -1485,7 +1485,7 @@ impl eframe::App for JxlApp {
                             );
                             ui.add_space(4.0);
                             ui.label(
-                                RichText::new(format!("{} × {} pixels", w, h))
+                                RichText::new(format!("{} x {} pixels", w, h))
                                     .size(13.0)
                                     .color(theme::TEXT_PRIMARY),
                             );
@@ -1649,7 +1649,7 @@ impl eframe::App for JxlApp {
                             .strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.add(
-                                egui::Button::new(RichText::new("✕").size(14.0).color(theme::TEXT_MUTED))
+                                egui::Button::new(RichText::new("X").size(14.0).color(theme::TEXT_MUTED))
                                     .frame(false)
                             ).clicked() {
                                 self.show_encoder = false;
@@ -1663,22 +1663,22 @@ impl eframe::App for JxlApp {
                         .color(theme::TEXT_MUTED));
                     ui.add_space(12.0);
 
+                    ui.group(|ui| {
                     ui.label(RichText::new("Input")
                         .size(11.0)
                         .color(theme::TEXT_MUTED));
                     ui.horizontal(|ui| {
-                        let input_text = self.encoder_state
+                        let mut input_text = self.encoder_state
                             .input_path
                             .as_ref()
                             .map(|p| p.display().to_string())
                             .unwrap_or_else(|| "No input selected".to_string());
-                        let path_label = egui::Label::new(
-                            RichText::new(input_text)
-                                .size(12.0)
-                                .color(theme::TEXT_SECONDARY)
-                                .monospace()
-                        ).truncate();
-                        ui.add_sized([430.0, 20.0], path_label);
+                        ui.add_sized(
+                            [430.0, 24.0],
+                            egui::TextEdit::singleline(&mut input_text)
+                                .font(egui::TextStyle::Monospace)
+                                .interactive(false),
+                        );
                         if ui.button("Choose...").clicked() {
                             should_pick_input = true;
                         }
@@ -1689,21 +1689,21 @@ impl eframe::App for JxlApp {
                         .size(11.0)
                         .color(theme::TEXT_MUTED));
                     ui.horizontal(|ui| {
-                        let output_text = self.encoder_state
+                        let mut output_text = self.encoder_state
                             .output_path
                             .as_ref()
                             .map(|p| p.display().to_string())
                             .unwrap_or_else(|| "No output selected".to_string());
-                        let path_label = egui::Label::new(
-                            RichText::new(output_text)
-                                .size(12.0)
-                                .color(theme::TEXT_SECONDARY)
-                                .monospace()
-                        ).truncate();
-                        ui.add_sized([430.0, 20.0], path_label);
+                        ui.add_sized(
+                            [430.0, 24.0],
+                            egui::TextEdit::singleline(&mut output_text)
+                                .font(egui::TextStyle::Monospace)
+                                .interactive(false),
+                        );
                         if ui.button("Choose...").clicked() {
                             should_pick_output = true;
                         }
+                    });
                     });
 
                     ui.add_space(12.0);
@@ -1717,6 +1717,7 @@ impl eframe::App for JxlApp {
                     );
                     ui.add_space(12.0);
 
+                    ui.group(|ui| {
                     ui.label(RichText::new("Encoder Settings")
                         .size(11.0)
                         .color(theme::TEXT_MUTED));
@@ -1819,6 +1820,7 @@ impl eframe::App for JxlApp {
                             .size(10.0)
                             .color(theme::TEXT_MUTED));
                     }
+                    });
 
                     ui.add_space(12.0);
                     let button_text = if self.encoder_state.is_encoding { "Encoding..." } else { "Encode" };
@@ -1834,6 +1836,7 @@ impl eframe::App for JxlApp {
                         should_start_encode = true;
                     }
 
+                    ui.group(|ui| {
                     if self.encoder_state.is_encoding {
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
@@ -1872,6 +1875,7 @@ impl eframe::App for JxlApp {
                             }
                         });
                     }
+                    });
                 });
 
             if should_pick_input {
@@ -1920,7 +1924,7 @@ impl eframe::App for JxlApp {
                             .strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.add(
-                                egui::Button::new(RichText::new("✕").size(14.0).color(theme::TEXT_MUTED))
+                                egui::Button::new(RichText::new("X").size(14.0).color(theme::TEXT_MUTED))
                                     .frame(false)
                             ).clicked() {
                                 self.show_settings = false;
