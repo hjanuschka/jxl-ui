@@ -240,10 +240,10 @@ jobs:
         run: |
           mkdir -p release
 
-          # Linux - create tar.gz
+          # Linux - create tar.xz
           cd artifacts/jxl-ui-linux-x86_64
           chmod +x jxl-ui
-          tar -czvf ../../release/jxl-ui-linux-x86_64.tar.gz jxl-ui
+          tar -cJvf ../../release/jxl-ui-linux-x86_64.tar.xz jxl-ui
           cd ../..
 
           # Windows - create zip
