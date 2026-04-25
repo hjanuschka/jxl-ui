@@ -57,7 +57,7 @@ Download the latest release for your platform from the [releases page](https://g
 
 - **macOS**: Download the `.dmg` file (available for both Intel and Apple Silicon)
 - **Windows**: Download the `.zip` file
-- **Linux**: Download the `.tar.gz` file
+- **Linux**: Download the `.tar.xz` file
 
 ### From Source
 
