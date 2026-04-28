@@ -1,6 +1,6 @@
 [package]
 name = "jxl-ui"
-version = "0.5.4"
+version = "0.5.5"
 edition = "2021"
 description = "A cross-platform JPEG XL image viewer built with egui"
 authors = ["Harald Januschka"]
@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 # JXL decoding
-jxl = { git = "https://github.com/hjanuschka/jxl-rs.git", branch = "jxl-encoder-cargo", features = ["all-simd", "encoder-vardct"] }
+jxl = { git = "https://github.com/hjanuschka/jxl-rs.git", rev = "f983c57c62ba10deb1eadbbcededb7af7931cd58", features = ["all-simd", "encoder-vardct"] }
 
 # egui GUI framework (cross-platform)
 eframe = "0.29"
